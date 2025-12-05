@@ -1,42 +1,43 @@
 import requests
+from playwright.sync_api import sync_playwright
 
-# ------------------ CONFIG ------------------
-SHOP = "546bf9.myshopify.com"  # Your Shopify store domain
-TOKEN = "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"  # Admin API token
+# ---------------- CONFIG ----------------
+SHOP = "546bf9.myshopify.com"
+TOKEN = "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"
 API_VERSION = "2025-10"
 
 META_NAMESPACE = "custom"
-META_KEY = "au_link"   # Metafield: AU Link
-SET_DRAFT = True  # Set to False if you only want to list inactive products
-# -------------------------------------------
-
-
-def check_url(url):
+META_KEY = "au_link"
+# ----------------------------------------
+def check_bunnings_url(url):
     """
+    Opens URL in a real browser (executes JS)
     Returns (is_valid, final_url)
-    False if Bunnings redirected to inactive product (contains 'isinactiveproduct=true')
-    or if HTTP status is 404.
     """
     try:
-        r = requests.get(url, timeout=10, allow_redirects=True)
-        final_url = r.url.lower()
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
 
-        # Broken link
-        if r.status_code == 404:
-            return False, final_url
+            # Open the page and wait for all JS
+            page.goto(url, wait_until="networkidle")
 
-        # Bunnings inactive product redirect
-        if "isinactiveproduct=true" in final_url and final_url != url.lower():
-            return False, final_url
+            final_url = page.url.lower()
 
-        return True, final_url
+            browser.close()
+
+            # Detect inactive product
+            if "isinactiveproduct=true" in final_url:
+                return False, final_url
+
+            return True, final_url
 
     except Exception as e:
-        print(f"Error checking URL {url}: {e}")
+        print("Browser error:", e)
         return False, url
 
 
-# ------------------ STEP 1: Fetch products ------------------
+# ---------------- FETCH PRODUCTS ----------------
 query = f"""
 {{
   products(first: 200) {{
@@ -56,88 +57,60 @@ response = requests.post(
     headers={
         "X-Shopify-Access-Token": TOKEN,
         "Content-Type": "application/json",
-        "User-Agent": "Python Shopify Script"
     },
     json={"query": query}
 )
 
-try:
-    data = response.json()
-except Exception as e:
-    print("❌ Failed to parse Shopify response:", e)
-    print(response.text)
-    exit()
+data = response.json()
 
-if "errors" in data:
-    print("❌ Shopify returned errors:", data["errors"])
-    exit()
+products = data["data"]["products"]["nodes"]
 
-products = data.get("data", {}).get("products", {}).get("nodes", [])
-
-if not products:
-    print("⚠ No products found.")
-    exit()
-
-# ------------------ STEP 2: Check URLs ------------------
-inactive_products = []
-
+# ---------------- PROCESS PRODUCTS ----------------
 for p in products:
     mf = p.get("metafield")
+
     if not mf or not mf.get("value"):
-        print(f"⚠ Skipping {p['title']}: AU Link metafield missing or empty")
+        print(f"⚠ Skipping {p['title']}: No AU Link")
         continue
 
     url = mf["value"]
     print(f"\nChecking: {p['title']} → {url}")
 
-    is_valid, final_url = check_url(url)
+    is_valid, final_url = check_bunnings_url(url)
 
     if not is_valid:
-        print(f"❌ Inactive or broken → {final_url}")
-        inactive_products.append({
-            "title": p["title"],
-            "id": p["id"],
-            "original_url": url,
-            "final_url": final_url
-        })
+        print(f"❌ Inactive or Broken Link → {final_url}")
+        print("→ Setting product to DRAFT...")
 
-        # Optionally set product to draft
-        if SET_DRAFT:
-            mutation = f"""
-            mutation {{
-              productUpdate(input: {{
-                id: "{p['id']}",
-                status: DRAFT
-              }}) {{
-                product {{
-                  id
-                  status
-                }}
-                userErrors {{
-                  field
-                  message
-                }}
-              }}
+        mutation = f"""
+        mutation {{
+          productUpdate(input: {{
+            id: "{p['id']}",
+            status: DRAFT
+          }}) {{
+            product {{
+              id
+              status
             }}
-            """
-            update = requests.post(
-                f"https://{SHOP}/admin/api/{API_VERSION}/graphql.json",
-                headers={
-                    "X-Shopify-Access-Token": TOKEN,
-                    "Content-Type": "application/json",
-                    "User-Agent": "Python Shopify Script"
-                },
-                json={"query": mutation}
-            )
-            try:
-                print("→ Set to DRAFT result:", update.json())
-            except Exception as e:
-                print("❌ Failed to parse update response:", e)
-                print(update.text)
+            userErrors {{
+              field
+              message
+            }}
+          }}
+        }}
+        """
+
+        update = requests.post(
+            f"https://{SHOP}/admin/api/{API_VERSION}/graphql.json",
+            headers={
+                "X-Shopify-Access-Token": TOKEN,
+                "Content-Type": "application/json",
+            },
+            json={"query": mutation}
+        )
+
+        print("Update result:", update.json())
     else:
         print(f"✔ URL OK → {final_url}")
 
-# ------------------ STEP 3: Report ------------------
-print("\n✅ Inactive/Broken products found:", len(inactive_products))
-for ip in inactive_products:
-    print(f"- {ip['title']} → {ip['final_url']}")
+print("\n✅ Completed.")
