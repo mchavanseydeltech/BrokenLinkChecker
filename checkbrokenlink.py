@@ -54,6 +54,9 @@ response = requests.post(
     json={"query": query}
 )
 
+print("HTTP status:", response.status_code)
+print("Response text:", response.text)
+
 # --- Safely parse response ---
 try:
     data = response.json()
