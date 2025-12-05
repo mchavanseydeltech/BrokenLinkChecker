@@ -1,30 +1,33 @@
-name: Check AU Link & Draft Products
+name: Check Broken AU Links
 
 on:
+  workflow_dispatch:  # allows manual trigger
   schedule:
-    - cron: "0 3 * * *"   # Runs every day at 03:00 UTC
-  workflow_dispatch:       # Allows manual run
+    - cron: '0 2 * * *'  # optional: runs every day at 2:00 UTC
 
 jobs:
-  run-script:
+  check-links:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      # Step 1 — Checkout your repo
+      - name: Checkout code
         uses: actions/checkout@v3
 
-        # Python setup
-      - name: Set up Python
+      # Step 2 — Setup Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-        # Install dependencies
+      # Step 3 — Install dependencies
       - name: Install dependencies
         run: |
-          pip install requests
+          pip install --upgrade pip
+          pip install requests playwright
+          playwright install
 
-        # Run your script
-      - name: Run AU Link checker
+      # Step 4 — Run the broken link checker
+      - name: Run broken link script
         run: |
-          python checkbrokenlink.py
+          python BrokenLinkChecker/checkbrokenlink.py
