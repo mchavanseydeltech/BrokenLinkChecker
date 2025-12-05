@@ -1,25 +1,25 @@
 import requests
 
-SHOP = "orionsecuritysystems.com.au"
+# ------------------ CONFIG ------------------
+SHOP = "orionsecuritysystems.myshopify.com"  # must include .myshopify.com
 TOKEN = "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"
 API_VERSION = "2025-10"
 
 META_NAMESPACE = "custom"
 META_KEY = "au_link"   # Metafield: AU Link
+# -------------------------------------------
 
 
 def check_url(url):
     """
-    Return False if:
-    1. URL gives 404
-    2. URL contains &isinactiveproduct=true after redirects
-    Otherwise return True
+    Returns (is_valid, final_url)
+    False if URL is 404 or contains '&isinactiveproduct=true'
     """
     try:
         r = requests.get(url, timeout=8, allow_redirects=True)
         final_url = r.url.lower()  # follow redirects
 
-        # Check 404
+        # Check for 404
         if r.status_code == 404:
             return False, final_url
 
@@ -27,14 +27,14 @@ def check_url(url):
         if "isinactiveproduct=true" in final_url:
             return False, final_url
 
-        # URL OK
         return True, final_url
 
     except Exception as e:
         print("Error checking URL:", e)
         return False, url
 
-# Step 1 — fetch products with AU Link metafield
+
+# ------------------ STEP 1: Fetch products ------------------
 query = f"""
 {{
   products(first: 200) {{
@@ -58,18 +58,15 @@ response = requests.post(
     json={"query": query}
 )
 
-print("HTTP status:", response.status_code)
-print("Response text:", response.text)
-
-# --- Safely parse response ---
+# Safe JSON parsing
 try:
     data = response.json()
 except Exception as e:
-    print("❌ Failed to parse JSON:", e)
+    print("❌ Failed to parse Shopify response:", e)
     print(response.text)
     exit()
 
-# Check for errors in Shopify response
+# Check for Shopify errors
 if "errors" in data:
     print("❌ Shopify returned errors:", data["errors"])
     exit()
@@ -81,10 +78,11 @@ if "data" not in data or "products" not in data["data"]:
 
 products = data["data"]["products"]["nodes"]
 
-# --- Loop through products ---
+# ------------------ STEP 2: Loop through products ------------------
 for p in products:
     mf = p.get("metafield")
     if not mf or not mf.get("value"):
+        print(f"⚠ Skipping {p['title']}: AU Link metafield missing or empty")
         continue
 
     url = mf["value"]
@@ -92,9 +90,8 @@ for p in products:
 
     is_valid, final_url = check_url(url)
 
-    # If broken OR redirected to &isinactiveproduct=true
     if not is_valid:
-        print(f"❌ Invalid AU Link → {final_url}")
+        print(f"❌ Invalid or inactive AU Link → {final_url}")
         print("→ Setting product to DRAFT...")
 
         mutation = f"""
@@ -133,4 +130,4 @@ for p in products:
     else:
         print(f"✔ URL OK → {final_url}")
 
-print("\nCompleted.")
+print("\n✅ Completed all products.")
