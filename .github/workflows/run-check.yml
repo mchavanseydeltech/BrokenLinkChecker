@@ -27,4 +27,4 @@ jobs:
         # Run your script
       - name: Run AU Link checker
         run: |
-          python check_au_links.py
+          python checkbrokenlink.py
