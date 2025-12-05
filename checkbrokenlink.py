@@ -1,6 +1,6 @@
 import requests
 
-SHOP = "orionsecuritysystems.myshopify.com"
+SHOP = "orionsecuritysystems.com.au"
 TOKEN = "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"
 API_VERSION = "2025-10"
 
