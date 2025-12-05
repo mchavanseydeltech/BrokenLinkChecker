@@ -9,26 +9,30 @@ META_KEY = "au_link"   # Metafield: AU Link
 
 
 def check_url(url):
-    """Return (is_valid, final_url)."""
+    """
+    Return False if:
+    1. URL gives 404
+    2. URL contains &isinactiveproduct=true after redirects
+    Otherwise return True
+    """
     try:
         r = requests.get(url, timeout=8, allow_redirects=True)
-        final_url = r.url
+        final_url = r.url.lower()  # follow redirects
 
-        # Detect 404
+        # Check 404
         if r.status_code == 404:
             return False, final_url
 
-        # Detect redirect to inactive product
-        if "isinactiveproduct=true" in final_url.lower():
+        # Check for inactive product
+        if "isinactiveproduct=true" in final_url:
             return False, final_url
 
-        # URL is OK
+        # URL OK
         return True, final_url
 
     except Exception as e:
         print("Error checking URL:", e)
         return False, url
-
 
 # Step 1 — fetch products with AU Link metafield
 query = f"""
