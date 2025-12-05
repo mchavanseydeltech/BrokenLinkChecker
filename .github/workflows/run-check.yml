@@ -30,4 +30,4 @@ jobs:
       # Step 4 — Run the broken link checker
       - name: Run broken link script
         run: |
-          python BrokenLinkChecker/checkbrokenlink.py
+          python checkbrokenlink.py
