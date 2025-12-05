@@ -1,7 +1,7 @@
 import requests
 
 SHOP = "orionsecuritysystems.com.au"
-TOKEN = "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"
+TOKEN = "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"
 API_VERSION = "2025-10"
 
 META_NAMESPACE = "custom"
@@ -26,7 +26,7 @@ def check_url(url):
         return True, final_url
 
     except Exception as e:
-        print("Error:", e)
+        print("Error checking URL:", e)
         return False, url
 
 
@@ -54,11 +54,30 @@ response = requests.post(
     json={"query": query}
 )
 
-products = response.json()["data"]["products"]["nodes"]
+# --- Safely parse response ---
+try:
+    data = response.json()
+except Exception as e:
+    print("❌ Failed to parse JSON:", e)
+    print(response.text)
+    exit()
 
+# Check for errors in Shopify response
+if "errors" in data:
+    print("❌ Shopify returned errors:", data["errors"])
+    exit()
+
+if "data" not in data or "products" not in data["data"]:
+    print("❌ Unexpected Shopify response structure:")
+    print(response.text)
+    exit()
+
+products = data["data"]["products"]["nodes"]
+
+# --- Loop through products ---
 for p in products:
     mf = p.get("metafield")
-    if not mf:
+    if not mf or not mf.get("value"):
         continue
 
     url = mf["value"]
@@ -98,7 +117,12 @@ for p in products:
             json={"query": mutation}
         )
 
-        print("Update result:", update.json())
+        # Print update result safely
+        try:
+            print("Update result:", update.json())
+        except Exception as e:
+            print("❌ Failed to parse update response:", e)
+            print(update.text)
     else:
         print(f"✔ URL OK → {final_url}")
 
