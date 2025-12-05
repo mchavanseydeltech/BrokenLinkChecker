@@ -1,8 +1,9 @@
 import requests
+import json
 
 # ------------------ CONFIG ------------------
 SHOP = "546bf9.myshopify.com"  # must include .myshopify.com
-TOKEN = "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"
+TOKEN = "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"  # Admin API token
 API_VERSION = "2025-10"
 
 META_NAMESPACE = "custom"
@@ -49,6 +50,9 @@ query = f"""
 }}
 """
 
+print("Sending GraphQL request to Shopify...")
+print(f"Shop: {SHOP}, API version: {API_VERSION}")
+
 response = requests.post(
     f"https://{SHOP}/admin/api/{API_VERSION}/graphql.json",
     headers={
@@ -58,12 +62,17 @@ response = requests.post(
     json={"query": query}
 )
 
+# ------------------ STEP 2: Debug response ------------------
+print("\n--- RESPONSE ---")
+print("HTTP Status Code:", response.status_code)
+print("Response Headers:", response.headers)
+print("Response Text:", response.text)
+
 # Safe JSON parsing
 try:
     data = response.json()
 except Exception as e:
     print("❌ Failed to parse Shopify response:", e)
-    print(response.text)
     exit()
 
 # Check for Shopify errors
@@ -72,13 +81,12 @@ if "errors" in data:
     exit()
 
 if "data" not in data or "products" not in data["data"]:
-    print("❌ Unexpected Shopify response structure:")
-    print(response.text)
+    print("❌ Unexpected Shopify response structure")
     exit()
 
 products = data["data"]["products"]["nodes"]
 
-# ------------------ STEP 2: Loop through products ------------------
+# ------------------ STEP 3: Loop through products ------------------
 for p in products:
     mf = p.get("metafield")
     if not mf or not mf.get("value"):
