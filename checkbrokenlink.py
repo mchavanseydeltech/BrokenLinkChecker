@@ -1,6 +1,3 @@
-import json
-import time
-from playwright.sync_api import sync_playwright
 import requests
 
 # ------------------ CONFIG ------------------
@@ -14,23 +11,25 @@ SET_DRAFT = True  # Set to False if you only want to list inactive products
 # -------------------------------------------
 
 
-def check_au_link(url):
+def check_url(url):
     """
-    Opens the URL in a headless browser to detect JS redirects.
     Returns (is_valid, final_url)
+    False if Bunnings redirected to inactive product (contains 'isinactiveproduct=true')
+    or if HTTP status is 404.
     """
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
-            page.goto(url, wait_until="load", timeout=15000)  # wait max 15s
-            time.sleep(1)  # small wait for JS redirects
-            final_url = page.url.lower()
-            browser.close()
+        r = requests.get(url, timeout=10, allow_redirects=True)
+        final_url = r.url.lower()
 
-            if "isinactiveproduct=true" in final_url:
-                return False, final_url
-            return True, final_url
+        # Broken link
+        if r.status_code == 404:
+            return False, final_url
+
+        # Bunnings inactive product redirect
+        if "isinactiveproduct=true" in final_url and final_url != url.lower():
+            return False, final_url
+
+        return True, final_url
 
     except Exception as e:
         print(f"Error checking URL {url}: {e}")
@@ -91,7 +90,7 @@ for p in products:
     url = mf["value"]
     print(f"\nChecking: {p['title']} → {url}")
 
-    is_valid, final_url = check_au_link(url)
+    is_valid, final_url = check_url(url)
 
     if not is_valid:
         print(f"❌ Inactive or broken → {final_url}")
