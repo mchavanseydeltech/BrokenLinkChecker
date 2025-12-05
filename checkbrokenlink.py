@@ -1,8 +1,10 @@
-import requests
 import json
+import time
+from playwright.sync_api import sync_playwright
+import requests
 
 # ------------------ CONFIG ------------------
-SHOP = "546bf9.myshopify.com"  # must include .myshopify.com
+SHOP = "546bf9.myshopify.com"  # Your Shopify store domain
 TOKEN = "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"  # Admin API token
 API_VERSION = "2025-10"
 
@@ -12,24 +14,23 @@ SET_DRAFT = True  # Set to False if you only want to list inactive products
 # -------------------------------------------
 
 
-def check_url(url):
+def check_au_link(url):
     """
+    Opens the URL in a headless browser to detect JS redirects.
     Returns (is_valid, final_url)
-    False if URL is 404 or contains '&isinactiveproduct=true'
     """
     try:
-        r = requests.get(url, timeout=8, allow_redirects=True)
-        final_url = r.url.lower()  # follow redirects
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(url, wait_until="load", timeout=15000)  # wait max 15s
+            time.sleep(1)  # small wait for JS redirects
+            final_url = page.url.lower()
+            browser.close()
 
-        # Broken link
-        if r.status_code == 404:
-            return False, final_url
-
-        # Redirect to inactive product
-        if "isinactiveproduct=true" in final_url:
-            return False, final_url
-
-        return True, final_url
+            if "isinactiveproduct=true" in final_url:
+                return False, final_url
+            return True, final_url
 
     except Exception as e:
         print(f"Error checking URL {url}: {e}")
@@ -90,7 +91,7 @@ for p in products:
     url = mf["value"]
     print(f"\nChecking: {p['title']} → {url}")
 
-    is_valid, final_url = check_url(url)
+    is_valid, final_url = check_au_link(url)
 
     if not is_valid:
         print(f"❌ Inactive or broken → {final_url}")
