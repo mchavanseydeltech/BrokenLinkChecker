@@ -9,27 +9,59 @@ API_VERSION = "2025-10"
 META_NAMESPACE = "custom"
 META_KEY = "au_link"
 # ----------------------------------------
+
+
 def check_bunnings_url(url):
     """
-    Opens URL in a real browser (executes JS)
+    Uses stealth browser settings to detect Bunnings inactive redirects.
     Returns (is_valid, final_url)
     """
+
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
-            page = browser.new_page()
+            browser = p.chromium.launch(
+                headless=False,                         # IMPORTANT: headful mode
+                args=[
+                    "--disable-blink-features=AutomationControlled",
+                ]
+            )
 
-            # Open the page and wait for all JS
+            context = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/121.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1280, "height": 800}
+            )
+
+            page = context.new_page()
+
+            # Visit original product URL
             page.goto(url, wait_until="networkidle")
+
+            # Allow extra JS time (Bunnings sometimes redirects after JS loads)
+            page.wait_for_timeout(3500)
 
             final_url = page.url.lower()
 
-            browser.close()
-
-            # Detect inactive product
+            # Detect redirected inactive page
             if "isinactiveproduct=true" in final_url:
+                browser.close()
                 return False, final_url
 
+            # Detect landing on Bunnings search page with no results
+            if "/search/products" in final_url:
+                browser.close()
+                return False, final_url
+
+            # Detect fallback pages that display: "product not found"
+            html = page.content().lower()
+            if "inactive product" in html or "no products found" in html:
+                browser.close()
+                return False, final_url
+
+            browser.close()
             return True, final_url
 
     except Exception as e:
@@ -62,7 +94,6 @@ response = requests.post(
 )
 
 data = response.json()
-
 products = data["data"]["products"]["nodes"]
 
 # ---------------- PROCESS PRODUCTS ----------------
@@ -79,7 +110,7 @@ for p in products:
     is_valid, final_url = check_bunnings_url(url)
 
     if not is_valid:
-        print(f"❌ Inactive or Broken Link → {final_url}")
+        print(f"❌ Inactive / Broken Link → {final_url}")
         print("→ Setting product to DRAFT...")
 
         mutation = f"""
@@ -101,7 +132,7 @@ for p in products:
         """
 
         update = requests.post(
-            f"https://{SHOP}/admin/api/{API_VERSION}/graphql.json",
+            f"https://" + SHOP + f"/admin/api/{API_VERSION}/graphql.json",
             headers={
                 "X-Shopify-Access-Token": TOKEN,
                 "Content-Type": "application/json",
