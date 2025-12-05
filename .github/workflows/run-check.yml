@@ -1,0 +1,30 @@
+name: Check AU Link & Draft Products
+
+on:
+  schedule:
+    - cron: "0 3 * * *"   # Runs every day at 03:00 UTC
+  workflow_dispatch:       # Allows manual run
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+        # Python setup
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: "3.11"
+
+        # Install dependencies
+      - name: Install dependencies
+        run: |
+          pip install requests
+
+        # Run your script
+      - name: Run AU Link checker
+        run: |
+          python check_au_links.py
