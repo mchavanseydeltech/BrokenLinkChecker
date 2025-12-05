@@ -1,33 +1,27 @@
-name: Check Broken AU Links
+name: Broken Link Checker
 
 on:
-  workflow_dispatch:  # allows manual trigger
+  workflow_dispatch:
   schedule:
-    - cron: '0 2 * * *'  # optional: runs every day at 2:00 UTC
+    - cron: "0 */6 * * *"   # every 6 hours
 
 jobs:
-  check-links:
+  run-check:
     runs-on: ubuntu-latest
 
     steps:
-      # Step 1 — Checkout your repo
-      - name: Checkout code
-        uses: actions/checkout@v3
+    - name: Checkout repo
+      uses: actions/checkout@v4
 
-      # Step 2 — Setup Python
-      - name: Setup Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
+    - name: Setup Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.11'
 
-      # Step 3 — Install dependencies
-      - name: Install dependencies
-        run: |
-          pip install --upgrade pip
-          pip install requests playwright
-          playwright install
+    - name: Install dependencies
+      run: |
+        pip install requests playwright
+        playwright install chromium
 
-      # Step 4 — Run the broken link checker
-      - name: Run broken link script
-        run: |
-          python checkbrokenlink.py
+    - name: Run broken link checker
+      run: python checkbrokenlink.py
