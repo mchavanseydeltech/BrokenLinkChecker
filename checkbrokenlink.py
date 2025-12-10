@@ -25,16 +25,22 @@ session.headers.update({
 
 def check_bunnings_redirect(url):
     """
-    Detect inactive product by redirect chain ONLY.
-    Bunnings inactive product ALWAYS ends at:
-    /search/products?...isinactiveproduct=true
+    Detect inactive product by checking ENTIRE redirect chain.
+    Bunnings marks inactive products with redirect containing:
+       &isinactiveproduct=true
     """
+
     try:
         r = session.get(url, timeout=10, allow_redirects=True)
 
-        final_url = r.url.lower()
+        # 1️⃣ Check ALL redirects
+        for redirect in r.history:
+            redirect_url = redirect.url.lower()
+            if "isinactiveproduct=true" in redirect_url:
+                return False, redirect_url
 
-        # Detect inactive redirect
+        # 2️⃣ Check final URL
+        final_url = r.url.lower()
         if "isinactiveproduct=true" in final_url:
             return False, final_url
 
