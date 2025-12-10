@@ -49,9 +49,9 @@ data = response.json()
 products = data["data"]["products"]["nodes"]
 
 # ------------------ Function: Detect inactive Bunnings ------------------
-def detect_inactive_bunnings(url, timeout=10):
+def detect_inactive_bunnings(url, timeout=15):
     """
-    Opens the page like a real browser and waits for JS redirects.
+    Detect inactive Bunnings products.
     Returns (True, final_url) if active, (False, final_url) if inactive.
     """
     try:
@@ -65,28 +65,32 @@ def detect_inactive_bunnings(url, timeout=10):
             page = context.new_page()
             page.goto(url)
 
-            # Wait until URL stabilizes (no changes for 1 sec or timeout)
-            elapsed = 0
-            last_url = page.url.lower()
-            while elapsed < timeout:
-                time.sleep(1)
-                elapsed += 1
-                current_url = page.url.lower()
-                if current_url != last_url:
-                    last_url = current_url
-                    elapsed = 0  # reset timer if URL changed
-
             final_url = page.url.lower()
-            browser.close()
+            start_time = time.time()
 
-            if "isinactiveproduct=true" in final_url:
+            # Poll for URL changes for up to `timeout` seconds
+            while time.time() - start_time < timeout:
+                current_url = page.url.lower()
+                if current_url != final_url:
+                    final_url = current_url
+                # If inactive detected in URL, stop early
+                if "isinactiveproduct=true" in final_url:
+                    browser.close()
+                    return False, final_url
+                time.sleep(0.5)  # short delay
+
+            # Additional check: page content contains search results instead of product
+            content = page.content().lower()
+            if "isinactiveproduct=true" in content or "no products found" in content:
+                browser.close()
                 return False, final_url
+
+            browser.close()
             return True, final_url
 
     except Exception as e:
         print("Playwright warning (treating as active):", e)
         return True, url
-
 
 
 # ------------------ PROCESS PRODUCTS ------------------
