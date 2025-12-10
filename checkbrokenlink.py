@@ -68,12 +68,17 @@ def detect_inactive_bunnings(url):
             final_url = page.url.lower()
             browser.close()
 
+            # Only mark inactive if URL explicitly has isinactiveproduct=true
             if "isinactiveproduct=true" in final_url:
                 return False, final_url
+
             return True, final_url
+
     except Exception as e:
-        print("Playwright error:", e)
-        return False, url
+        # If Playwright fails, treat as unknown instead of inactive
+        print("Playwright warning (treating as active):", e)
+        return True, url  # ⚡ Treat as active
+
 
 # ------------------ PROCESS PRODUCTS ------------------
 for p in products:
