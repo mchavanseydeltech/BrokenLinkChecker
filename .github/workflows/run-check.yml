@@ -1,31 +1,27 @@
-
-name: Check Inactive Products
+name: Check Broken Links Or Inactive Products
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *"   # Runs every 6 hours
+    - cron: "0 */6 * * *"   # Every 6 hours
 
 jobs:
-  check-products:
+  run-check:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
-      - uses: actions/checkout@v3
+      - name: Checkout Repo
+        uses: actions/checkout@v3
 
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.12'
 
-      - name: Install dependencies
+      - name: Install Dependencies
         run: |
           pip install requests python-dotenv
 
-      - name: Run inactive check script
-        env:
-          SHOPIFY_STORE_URL: ${{ secrets.SHOPIFY_STORE_URL }}
-          SHOPIFY_ACCESS_TOKEN: ${{ secrets.SHOPIFY_ACCESS_TOKEN }}
+      - name: Run Script
         run: |
-          python update_products.py
+          python checkbrokenlink.py
