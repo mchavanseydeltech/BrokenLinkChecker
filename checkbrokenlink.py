@@ -1,4 +1,6 @@
+from playwright.sync_api import sync_playwright
 import requests
+import time
 
 # ------------------ CONFIG ------------------
 SHOP = "cassien24.myshopify.com"
@@ -9,52 +11,49 @@ META_NAMESPACE = "custom"
 META_KEY = "au_link"
 # -------------------------------------------
 
-session = requests.Session()
 
-# Fake browser headers so Cloudflare does NOT block us
-session.headers.update({
-    "User-Agent":
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-        "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/122.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-    "Accept-Language": "en-US,en;q=0.5",
-    "Upgrade-Insecure-Requests": "1"
-})
-
-
-def check_bunnings_redirect(url):
+def detect_inactive_bunnings(url):
     """
-    Detect inactive product by checking ENTIRE redirect chain.
-    Bunnings marks inactive products with redirect containing:
-       &isinactiveproduct=true
+    Opens the page like a REAL browser. Detects JS redirects.
+    Works for:
+      - HTTP redirects
+      - JavaScript redirects
+      - Meta refresh redirects
     """
 
     try:
-        r = session.get(url, timeout=10, allow_redirects=True)
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            context = browser.new_context(user_agent=(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/120.0.0.0 Safari/537.36"
+            ))
+            page = context.new_page()
 
-        # 1️⃣ Check ALL redirects
-        for redirect in r.history:
-            redirect_url = redirect.url.lower()
-            if "isinactiveproduct=true" in redirect_url:
-                return False, redirect_url
+            page.goto(url, wait_until="networkidle")
 
-        # 2️⃣ Check final URL
-        final_url = r.url.lower()
-        if "isinactiveproduct=true" in final_url:
-            return False, final_url
+            time.sleep(2)  # allow JS redirects
 
-        return True, final_url
+            final_url = page.url.lower()
+
+            browser.close()
+
+            # detect inactive
+            if "isinactiveproduct=true" in final_url:
+                return False, final_url
+
+            return True, final_url
 
     except Exception as e:
-        print("Request error:", e)
+        print("Playwright error:", e)
         return False, url
 
 
 # ------------------ FETCH PRODUCTS ------------------
 query = f"""
 {{
-  products(first: 200) {{
+  products(first: 250) {{
     nodes {{
       id
       title
@@ -75,8 +74,7 @@ response = requests.post(
     json={"query": query}
 )
 
-data = response.json()
-products = data["data"]["products"]["nodes"]
+products = response.json()["data"]["products"]["nodes"]
 
 # ------------------ PROCESS PRODUCTS ------------------
 for p in products:
@@ -90,7 +88,7 @@ for p in products:
 
     print(f"\nChecking: {p['title']} → {url}")
 
-    ok, final_url = check_bunnings_redirect(url)
+    ok, final_url = detect_inactive_bunnings(url)
 
     if not ok:
         print(f"❌ INACTIVE → {final_url}")
