@@ -1,27 +1,31 @@
-name: Check Broken Links Or Inactive Products
+name: Broken Link Checker
 
 on:
   workflow_dispatch:
   schedule:
-    - cron: "0 */6 * * *"   # Every 6 hours
+    - cron: "0 0 * * *"  # Runs daily at midnight
 
 jobs:
   run-check:
     runs-on: ubuntu-latest
 
     steps:
+      # Step 1: Checkout repo
       - name: Checkout Repo
         uses: actions/checkout@v3
 
+      # Step 2: Setup Python
       - name: Setup Python
         uses: actions/setup-python@v4
         with:
-          python-version: '3.12'
+          python-version: "3.12"
 
-      - name: Install Dependencies
+      # Step 3: Install Requests (Playwright installed by script)
+      - name: Install Python dependencies
         run: |
-          pip install requests python-dotenv
+          pip install requests
 
-      - name: Run Script
+      # Step 4: Run the broken link checker script
+      - name: Run Broken Link Checker
         run: |
           python checkbrokenlink.py
