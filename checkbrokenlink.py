@@ -62,41 +62,49 @@ products = data["data"]["products"]["nodes"]
 def detect_inactive_bunnings(url):
     """
     Detect inactive Bunnings products:
-    1. Using Playwright (headful) to handle Cloudflare
-    2. Fallback to requests if timeout occurs
-    Returns (True, final_url) if active, (False, final_url) if inactive
+    - Returns (True, final_url) if active
+    - Returns (False, final_url) if inactive
     """
     # --- Try Playwright first ---
     try:
         with sync_playwright() as p:
-    browser = p.chromium.launch(headless=False, slow_mo=50)
-    context = browser.new_context(user_agent=...)
-    page = context.new_page()
+            browser = p.chromium.launch(headless=False, slow_mo=50)
+            context = browser.new_context(
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                viewport={"width":1920,"height":1080},
+                locale="en-US",
+                timezone_id="Australia/Sydney",
+                java_script_enabled=True
+            )
+            page = context.new_page()
 
-    try:
-        page.goto(url, wait_until="networkidle", timeout=90000)
-        page.wait_for_timeout(3000)
+            try:
+                page.goto(url, wait_until="domcontentloaded", timeout=120000)  # 2 minutes
+                page.wait_for_timeout(3000)  # extra wait to render JS
 
-        final_url = page.url.lower()
-        is_inactive = page.locator("text=Oops! This product is no longer available.").count() > 0
+                final_url = page.url.lower()
 
-    except Exception as e:
-        print("Playwright warning:", e)
-        # fallback will handle
-        is_inactive = None
-        final_url = url
+                # Check for "Oops! This product is no longer available." text
+                if page.locator("text=Oops! This product is no longer available.").count() > 0:
+                    return False, final_url  # INACTIVE → draft
 
-    finally:
-        browser.close()  # Only close here, after all actions
+                browser.close()
+                return True, final_url  # ACTIVE
+
+            except Exception as e:
+                print("⚠ Playwright page.goto warning:", e)
+                browser.close()  # Ensure browser closes
+                raise e  # fallback to requests
 
     except Exception as e:
         print("⚠ Playwright failed (fallback to requests):", e)
 
     # --- Fallback using requests ---
     try:
-        r = requests.get(url, timeout=15, allow_redirects=True, headers={
+        headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
-        })
+        }
+        r = requests.get(url, timeout=15, allow_redirects=True, headers=headers)
         final_url = r.url.lower()
         page_text = r.text.lower()
 
