@@ -49,9 +49,9 @@ data = response.json()
 products = data["data"]["products"]["nodes"]
 
 # ------------------ Function: Detect inactive Bunnings ------------------
-def detect_inactive_bunnings(url, timeout=15):
+def detect_inactive_bunnings(url, max_wait=15):
     """
-    Detect inactive Bunnings products reliably.
+    Detect inactive Bunnings products.
     Returns (True, final_url) if active,
             (False, final_url) if inactive.
     """
@@ -64,13 +64,13 @@ def detect_inactive_bunnings(url, timeout=15):
                 "Chrome/120.0.0.0 Safari/537.36"
             ))
             page = context.new_page()
-            page.goto(url, wait_until="networkidle")  # wait for JS to finish
-            time.sleep(2)  # allow any JS redirects
+            page.goto(url, wait_until="load")  # wait for page load
 
             final_url = page.url.lower()
-            # Poll for URL changes (catch slow JS redirects)
             start_time = time.time()
-            while time.time() - start_time < timeout:
+
+            # Poll URL every 0.5s until max_wait seconds
+            while time.time() - start_time < max_wait:
                 current_url = page.url.lower()
                 if current_url != final_url:
                     final_url = current_url
@@ -80,14 +80,14 @@ def detect_inactive_bunnings(url, timeout=15):
                 time.sleep(0.5)
 
             browser.close()
-
-            # ✅ Only mark inactive if URL contains 'isinactiveproduct=true'
+            # If parameter never appeared, treat as active
             return True, final_url
 
     except Exception as e:
-        # Do NOT mark product inactive on exception
+        # ⚠ Treat any Playwright exception as active, do NOT draft
         print("Playwright warning — treating as active:", e)
         return True, url
+
 
 
 # ------------------ PROCESS PRODUCTS ------------------
