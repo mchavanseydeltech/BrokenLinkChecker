@@ -51,8 +51,9 @@ products = data["data"]["products"]["nodes"]
 # ------------------ Function: Detect inactive Bunnings ------------------
 def detect_inactive_bunnings(url, timeout=15):
     """
-    Detect inactive Bunnings products.
-    Returns (True, final_url) if active, (False, final_url) if inactive.
+    Detect inactive Bunnings products reliably.
+    Returns (True, final_url) if active,
+            (False, final_url) if inactive.
     """
     try:
         with sync_playwright() as p:
@@ -63,33 +64,29 @@ def detect_inactive_bunnings(url, timeout=15):
                 "Chrome/120.0.0.0 Safari/537.36"
             ))
             page = context.new_page()
-            page.goto(url)
+            page.goto(url, wait_until="networkidle")  # wait for JS to finish
+            time.sleep(2)  # allow any JS redirects
 
             final_url = page.url.lower()
+            # Poll for URL changes (catch slow JS redirects)
             start_time = time.time()
-
-            # Poll for URL changes for up to `timeout` seconds
             while time.time() - start_time < timeout:
                 current_url = page.url.lower()
                 if current_url != final_url:
                     final_url = current_url
-                # If inactive detected in URL, stop early
                 if "isinactiveproduct=true" in final_url:
                     browser.close()
                     return False, final_url
-                time.sleep(0.5)  # short delay
-
-            # Additional check: page content contains search results instead of product
-            content = page.content().lower()
-            if "isinactiveproduct=true" in content or "no products found" in content:
-                browser.close()
-                return False, final_url
+                time.sleep(0.5)
 
             browser.close()
+
+            # ✅ Only mark inactive if URL contains 'isinactiveproduct=true'
             return True, final_url
 
     except Exception as e:
-        print("Playwright warning (treating as active):", e)
+        # Do NOT mark product inactive on exception
+        print("Playwright warning — treating as active:", e)
         return True, url
 
 
