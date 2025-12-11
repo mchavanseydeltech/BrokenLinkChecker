@@ -1,6 +1,7 @@
 import subprocess
 import sys
 import requests
+import time
 
 # ------------------ Auto-install Playwright if missing ------------------
 try:
@@ -65,20 +66,31 @@ def detect_inactive_bunnings(url):
     """
     try:
         with sync_playwright() as p:
+            # Launch browser in headless mode
             browser = p.chromium.launch(headless=True)
-            context = browser.new_context(user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/120.0.0.0 Safari/537.36"
-            ))
+            
+            # Realistic browser context
+            context = browser.new_context(
+                user_agent=(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                    "AppleWebKit/537.36 (KHTML, like Gecko) "
+                    "Chrome/120.0.0.0 Safari/537.36"
+                ),
+                viewport={"width": 1920, "height": 1080},
+                java_script_enabled=True
+            )
+            
             page = context.new_page()
             
-            # Go to the URL and wait for network to be idle
-            page.goto(url, wait_until="networkidle")
+            # Go to the URL and wait until network idle
+            page.goto(url, wait_until="networkidle", timeout=60000)  # 60s timeout
+            
+            # Extra wait to ensure JS content renders
+            page.wait_for_timeout(3000)  # 3 seconds
             
             final_url = page.url.lower()
             
-            # Check for the "Oops!" text anywhere on the page
+            # Detect "Oops!" message anywhere on page
             if page.locator("text=Oops! This product is no longer available.").count() > 0:
                 browser.close()
                 return False, final_url  # INACTIVE → draft
