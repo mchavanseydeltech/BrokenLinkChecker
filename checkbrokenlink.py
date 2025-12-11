@@ -6,9 +6,10 @@ TOKEN = "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"  # Replace with your Shopify ac
 API_VERSION = "2025-10"
 
 META_NAMESPACE = "custom"
-META_KEY = "au_link"
+META_KEY = "au_link"  # Metafield containing Bunnings product URL
 # -------------------------------------------
 
+# Headers to mimic real browser (avoid Cloudflare blocks)
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
                   "AppleWebKit/537.36 (KHTML, like Gecko) "
@@ -16,7 +17,7 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
 }
 
-# ------------------ Fetch products ------------------
+# ------------------ FETCH PRODUCTS ------------------
 query = f"""
 {{
   products(first: 250) {{
@@ -43,14 +44,15 @@ response = requests.post(
 data = response.json()
 products = data["data"]["products"]["nodes"]
 
-# ------------------ Function: detect inactive Bunnings ------------------
+# ------------------ FUNCTION: Detect Inactive Bunnings ------------------
 def detect_inactive_bunnings(url):
     try:
+        # Follow redirects
         r = requests.get(url, headers=HEADERS, timeout=15, allow_redirects=True)
         final_url = r.url.lower()
-        page_text = r.text.lower()
 
-        if "isinactiveproduct=true" in final_url or "oops! this product is no longer available." in page_text:
+        # Inactive products always redirect to a URL containing "isinactiveproduct=true"
+        if "isinactiveproduct=true" in final_url:
             return False, final_url  # INACTIVE
         return True, final_url  # ACTIVE
 
@@ -58,7 +60,7 @@ def detect_inactive_bunnings(url):
         print("⚠ Request failed, treating as active:", e)
         return True, url  # fallback
 
-# ------------------ Process products ------------------
+# ------------------ PROCESS PRODUCTS ------------------
 for p in products:
     mf = p.get("metafield")
     if not mf or not mf.get("value"):
@@ -101,7 +103,11 @@ for p in products:
             json={"query": mutation}
         )
 
-        print(update.json())
+        try:
+            print(update.json())
+        except Exception as e:
+            print("❌ Failed to parse update response:", e)
+            print(update.text)
     else:
         print(f"✔ ACTIVE → {final_url}")
 
