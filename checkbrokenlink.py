@@ -1,7 +1,6 @@
 import subprocess
 import sys
 import requests
-import time
 
 # ------------------ Auto-install Playwright if missing ------------------
 try:
@@ -59,12 +58,10 @@ if "errors" in data:
 products = data["data"]["products"]["nodes"]
 
 # ------------------ Function: Detect inactive Bunnings ------------------
-def detect_inactive_bunnings(url, max_wait=15):
+def detect_inactive_bunnings(url):
     """
-    Detect inactive Bunnings products based on page content.
-    Returns:
-        True, final_url  → Product is ACTIVE
-        False, final_url → Product is INACTIVE (draft)
+    Detect inactive Bunnings products by checking page content for
+    "Oops! This product is no longer available."
     """
     try:
         with sync_playwright() as p:
@@ -75,25 +72,23 @@ def detect_inactive_bunnings(url, max_wait=15):
                 "Chrome/120.0.0.0 Safari/537.36"
             ))
             page = context.new_page()
-            page.goto(url, wait_until="networkidle")  # wait for JS to finish
-
+            
+            # Go to the URL and wait for network to be idle
+            page.goto(url, wait_until="networkidle")
+            
             final_url = page.url.lower()
-            start_time = time.time()
-
-            # Poll page content for up to max_wait seconds
-            while time.time() - start_time < max_wait:
-                content = page.content().lower()
-                if "oops! this product is no longer available." in content:
-                    browser.close()
-                    return False, final_url  # INACTIVE → draft
-                time.sleep(0.5)
-
+            
+            # Check for the "Oops!" text anywhere on the page
+            if page.locator("text=Oops! This product is no longer available.").count() > 0:
+                browser.close()
+                return False, final_url  # INACTIVE → draft
+            
             browser.close()
-            return True, final_url  # ACTIVE if text not found
+            return True, final_url  # ACTIVE
 
     except Exception as e:
         print("Playwright warning — treating as active:", e)
-        return True, url  # Never mark DRAFT on exception
+        return True, url
 
 # ------------------ PROCESS PRODUCTS ------------------
 for p in products:
