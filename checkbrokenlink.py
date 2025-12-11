@@ -47,49 +47,31 @@ products = data["data"]["products"]["nodes"]
 # ------------------ FUNCTION: Detect Inactive Bunnings ------------------
 def detect_inactive_bunnings(url):
     try:
-        # Follow redirects
+        # Disable redirects to see intermediate URLs
+        r = requests.get(url, headers=HEADERS, timeout=15, allow_redirects=False)
+        
+        print(f"   Initial status: {r.status_code}")
+        print(f"   Initial URL: {r.url}")
+        
+        # Check for redirect headers
+        if r.status_code in [301, 302, 303, 307, 308]:
+            print(f"   Redirect to: {r.headers.get('Location', 'No location')}")
+        
+        # Now follow redirects
         r = requests.get(url, headers=HEADERS, timeout=15, allow_redirects=True)
         final_url = r.url.lower()
-        html_content = r.text.lower()
+        print(f"   Final URL: {final_url}")
+        
+        # Check HTML content for JavaScript clues
+        if "isinactiveproduct" in r.text.lower():
+            print("   Found 'isinactiveproduct' in page HTML")
+        
+        if "isinactiveproduct=true" in final_url:
+            return False, final_url
+        return True, final_url
 
-        # 1. Check for specific patterns in the FINAL URL
-        url_inactive_indicators = [
-            'isinactiveproduct=true',
-            'outofstock',
-            'discontinued',
-            'product-not-found',
-            'error',
-            '404'
-        ]
-        if any(indicator in final_url for indicator in url_inactive_indicators):
-            return False, final_url  # INACTIVE
-
-        # 2. Check HTTP status code for client or server errors
-        if r.status_code >= 400:
-            print(f"   HTTP {r.status_code} status code detected.")
-            return False, final_url  # INACTIVE
-
-        # 3. Check for specific text in the PAGE CONTENT
-        content_inactive_indicators = [
-            'this product is no longer available',
-            'out of stock',
-            'product discontinued',
-            'page not found',
-            'sorry, we couldn’t find that page'
-        ]
-        if any(indicator in html_content for indicator in content_inactive_indicators):
-            return False, final_url  # INACTIVE
-
-        # If none of the above conditions are met, assume the product is active
-        return True, final_url  # ACTIVE
-
-    except requests.exceptions.RequestException as e:
-        print(f"⚠ Request failed for {url}: {e}")
-        # Depending on your preference, you can treat failures as active or inactive.
-        # Treating as active prevents accidentally hiding products due to network errors.
-        return True, url
     except Exception as e:
-        print(f"⚠ Unexpected error for {url}: {e}")
+        print("⚠ Request failed:", e)
         return True, url
 
 # ------------------ PROCESS PRODUCTS ------------------
