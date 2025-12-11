@@ -1,16 +1,4 @@
-import subprocess
-import sys
 import requests
-import time
-
-# ------------------ Auto-install Playwright if missing ------------------
-try:
-    from playwright.sync_api import sync_playwright
-except ImportError:
-    print("Playwright not installed. Installing now...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "playwright"])
-    subprocess.check_call([sys.executable, "-m", "playwright", "install", "--with-deps"])
-    from playwright.sync_api import sync_playwright
 
 # ------------------ CONFIG ------------------
 SHOP = "cassien24.myshopify.com"      # Replace with your store
@@ -21,7 +9,14 @@ META_NAMESPACE = "custom"
 META_KEY = "au_link"
 # -------------------------------------------
 
-# ------------------ Shopify GraphQL Fetch ------------------
+HEADERS = {
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                  "AppleWebKit/537.36 (KHTML, like Gecko) "
+                  "Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8"
+}
+
+# ------------------ Fetch products ------------------
 query = f"""
 {{
   products(first: 250) {{
@@ -45,66 +40,13 @@ response = requests.post(
     json={"query": query}
 )
 
-try:
-    data = response.json()
-except Exception as e:
-    print("❌ Failed to parse Shopify response:", e)
-    print(response.text)
-    exit()
-
-if "errors" in data:
-    print("❌ Shopify returned errors:", data["errors"])
-    exit()
-
+data = response.json()
 products = data["data"]["products"]["nodes"]
 
-# ------------------ Function: Detect inactive Bunnings ------------------
+# ------------------ Function: detect inactive Bunnings ------------------
 def detect_inactive_bunnings(url):
-    """
-    Detect inactive Bunnings products:
-    - Returns (True, final_url) if active
-    - Returns (False, final_url) if inactive
-    """
-    # --- Try Playwright first ---
     try:
-        with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False, slow_mo=50)
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-                viewport={"width":1920,"height":1080},
-                locale="en-US",
-                timezone_id="Australia/Sydney",
-                java_script_enabled=True
-            )
-            page = context.new_page()
-
-            try:
-                page.goto(url, wait_until="domcontentloaded", timeout=120000)  # 2 minutes
-                page.wait_for_timeout(3000)  # extra wait to render JS
-
-                final_url = page.url.lower()
-
-                # Check for "Oops! This product is no longer available." text
-                if page.locator("text=Oops! This product is no longer available.").count() > 0:
-                    return False, final_url  # INACTIVE → draft
-
-                browser.close()
-                return True, final_url  # ACTIVE
-
-            except Exception as e:
-                print("⚠ Playwright page.goto warning:", e)
-                browser.close()  # Ensure browser closes
-                raise e  # fallback to requests
-
-    except Exception as e:
-        print("⚠ Playwright failed (fallback to requests):", e)
-
-    # --- Fallback using requests ---
-    try:
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
-        }
-        r = requests.get(url, timeout=15, allow_redirects=True, headers=headers)
+        r = requests.get(url, headers=HEADERS, timeout=15, allow_redirects=True)
         final_url = r.url.lower()
         page_text = r.text.lower()
 
@@ -113,10 +55,10 @@ def detect_inactive_bunnings(url):
         return True, final_url  # ACTIVE
 
     except Exception as e:
-        print("⚠ Requests fallback failed, treating as active:", e)
-        return True, url
+        print("⚠ Request failed, treating as active:", e)
+        return True, url  # fallback
 
-# ------------------ PROCESS PRODUCTS ------------------
+# ------------------ Process products ------------------
 for p in products:
     mf = p.get("metafield")
     if not mf or not mf.get("value"):
@@ -159,11 +101,7 @@ for p in products:
             json={"query": mutation}
         )
 
-        try:
-            print(update.json())
-        except Exception as e:
-            print("❌ Failed to parse update response:", e)
-            print(update.text)
+        print(update.json())
     else:
         print(f"✔ ACTIVE → {final_url}")
 
