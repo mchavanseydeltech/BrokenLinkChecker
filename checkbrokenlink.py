@@ -61,45 +61,53 @@ products = data["data"]["products"]["nodes"]
 # ------------------ Function: Detect inactive Bunnings ------------------
 def detect_inactive_bunnings(url):
     """
-    Detect inactive Bunnings products by checking page content for
-    "Oops! This product is no longer available."
+    Detect inactive Bunnings products:
+    1. Using Playwright (headful) to handle Cloudflare
+    2. Fallback to requests if timeout occurs
+    Returns (True, final_url) if active, (False, final_url) if inactive
     """
+    # --- Try Playwright first ---
     try:
         with sync_playwright() as p:
-            # Launch browser in headless mode
-            browser = p.chromium.launch(headless=True)
-            
-            # Realistic browser context
+            browser = p.chromium.launch(headless=False, slow_mo=50)  # headful + slow for anti-bot
             context = browser.new_context(
-                user_agent=(
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0.0.0 Safari/537.36"
-                ),
-                viewport={"width": 1920, "height": 1080},
+                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
+                viewport={"width":1920,"height":1080},
+                locale="en-US",
+                timezone_id="Australia/Sydney",
                 java_script_enabled=True
             )
-            
             page = context.new_page()
-            
-            # Go to the URL and wait until network idle
-            page.goto(url, wait_until="networkidle", timeout=60000)  # 60s timeout
-            
-            # Extra wait to ensure JS content renders
-            page.wait_for_timeout(3000)  # 3 seconds
-            
+            page.goto(url, wait_until="networkidle", timeout=90000)  # 90s
+            page.wait_for_timeout(3000)  # extra 3s to ensure JS
+
             final_url = page.url.lower()
-            
-            # Detect "Oops!" message anywhere on page
+
+            # Check for "Oops!" text indicating inactive product
             if page.locator("text=Oops! This product is no longer available.").count() > 0:
                 browser.close()
                 return False, final_url  # INACTIVE → draft
-            
+
             browser.close()
             return True, final_url  # ACTIVE
 
     except Exception as e:
-        print("Playwright warning — treating as active:", e)
+        print("⚠ Playwright failed (fallback to requests):", e)
+
+    # --- Fallback using requests ---
+    try:
+        r = requests.get(url, timeout=15, allow_redirects=True, headers={
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36"
+        })
+        final_url = r.url.lower()
+        page_text = r.text.lower()
+
+        if "isinactiveproduct=true" in final_url or "oops! this product is no longer available." in page_text:
+            return False, final_url  # INACTIVE
+        return True, final_url  # ACTIVE
+
+    except Exception as e:
+        print("⚠ Requests fallback failed, treating as active:", e)
         return True, url
 
 # ------------------ PROCESS PRODUCTS ------------------
