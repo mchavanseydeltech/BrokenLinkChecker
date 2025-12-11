@@ -69,27 +69,25 @@ def detect_inactive_bunnings(url):
     # --- Try Playwright first ---
     try:
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=False, slow_mo=50)  # headful + slow for anti-bot
-            context = browser.new_context(
-                user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0.0.0 Safari/537.36",
-                viewport={"width":1920,"height":1080},
-                locale="en-US",
-                timezone_id="Australia/Sydney",
-                java_script_enabled=True
-            )
-            page = context.new_page()
-            page.goto(url, wait_until="networkidle", timeout=90000)  # 90s
-            page.wait_for_timeout(3000)  # extra 3s to ensure JS
+    browser = p.chromium.launch(headless=False, slow_mo=50)
+    context = browser.new_context(user_agent=...)
+    page = context.new_page()
 
-            final_url = page.url.lower()
+    try:
+        page.goto(url, wait_until="networkidle", timeout=90000)
+        page.wait_for_timeout(3000)
 
-            # Check for "Oops!" text indicating inactive product
-            if page.locator("text=Oops! This product is no longer available.").count() > 0:
-                browser.close()
-                return False, final_url  # INACTIVE → draft
+        final_url = page.url.lower()
+        is_inactive = page.locator("text=Oops! This product is no longer available.").count() > 0
 
-            browser.close()
-            return True, final_url  # ACTIVE
+    except Exception as e:
+        print("Playwright warning:", e)
+        # fallback will handle
+        is_inactive = None
+        final_url = url
+
+    finally:
+        browser.close()  # Only close here, after all actions
 
     except Exception as e:
         print("⚠ Playwright failed (fallback to requests):", e)
