@@ -13,8 +13,8 @@ except ImportError:
     from playwright.sync_api import sync_playwright
 
 # ------------------ CONFIG ------------------
-SHOP = "cassien24.myshopify.com"      # Replace with your store
-TOKEN = "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"  # Replace with your Shopify access token
+SHOP = "yourstore.myshopify.com"       # Replace with your store
+TOKEN = "shpat_xxxxxxxxxxxxxxxxxxxx"   # Replace with your Shopify token
 API_VERSION = "2025-10"
 
 META_NAMESPACE = "custom"
