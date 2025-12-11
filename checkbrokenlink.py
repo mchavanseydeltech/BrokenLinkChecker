@@ -13,8 +13,8 @@ except ImportError:
     from playwright.sync_api import sync_playwright
 
 # ------------------ CONFIG ------------------
-SHOP = "cassien24.myshopify.com"  # Replace with your store
-TOKEN = "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"       # Replace with your token
+SHOP = "cassien24.myshopify.com"      # Replace with your store
+TOKEN = "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"  # Replace with your Shopify access token
 API_VERSION = "2025-10"
 
 META_NAMESPACE = "custom"
@@ -45,7 +45,17 @@ response = requests.post(
     json={"query": query}
 )
 
-data = response.json()
+try:
+    data = response.json()
+except Exception as e:
+    print("❌ Failed to parse Shopify response:", e)
+    print(response.text)
+    exit()
+
+if "errors" in data:
+    print("❌ Shopify returned errors:", data["errors"])
+    exit()
+
 products = data["data"]["products"]["nodes"]
 
 # ------------------ Function: Detect inactive Bunnings ------------------
@@ -70,7 +80,7 @@ def detect_inactive_bunnings(url, max_wait=15):
             final_url = page.url.lower()
             start_time = time.time()
 
-            # Poll URL every 0.5 seconds to catch JS redirects
+            # Poll URL for JS redirects
             while time.time() - start_time < max_wait:
                 current_url = page.url.lower()
                 if current_url != final_url:
@@ -81,14 +91,11 @@ def detect_inactive_bunnings(url, max_wait=15):
                 time.sleep(0.5)
 
             browser.close()
-            return True, final_url  # Active if parameter never appeared
+            return True, final_url
 
     except Exception as e:
         print("Playwright warning — treating as active:", e)
-        return True, url  # Never mark active product as draft due to error
-
-
-
+        return True, url  # Never mark product DRAFT on exception
 
 # ------------------ PROCESS PRODUCTS ------------------
 for p in products:
@@ -100,9 +107,9 @@ for p in products:
     url = mf["value"]
     print(f"\nChecking: {p['title']} → {url}")
 
-    ok, final_url = detect_inactive_bunnings(url)
+    is_active, final_url = detect_inactive_bunnings(url)
 
-    if not ok:
+    if not is_active:
         print(f"❌ INACTIVE → {final_url}")
         print("→ Moving to DRAFT")
 
@@ -139,6 +146,6 @@ for p in products:
             print("❌ Failed to parse update response:", e)
             print(update.text)
     else:
-        print(f"✔ Active Product → {final_url}")
+        print(f"✔ ACTIVE → {final_url}")
 
-print("\n✓ Completed all products.")
+print("\n✅ Completed all products.")
