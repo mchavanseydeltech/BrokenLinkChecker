@@ -52,8 +52,9 @@ products = data["data"]["products"]["nodes"]
 def detect_inactive_bunnings(url, max_wait=15):
     """
     Detect inactive Bunnings products.
-    Returns (True, final_url) if active,
-            (False, final_url) if inactive.
+    Returns:
+        True, final_url  → Product is ACTIVE
+        False, final_url → Product is INACTIVE (redirected)
     """
     try:
         with sync_playwright() as p:
@@ -64,12 +65,12 @@ def detect_inactive_bunnings(url, max_wait=15):
                 "Chrome/120.0.0.0 Safari/537.36"
             ))
             page = context.new_page()
-            page.goto(url, wait_until="load")  # wait for page load
+            page.goto(url, wait_until="load")
 
             final_url = page.url.lower()
             start_time = time.time()
 
-            # Poll URL every 0.5s until max_wait seconds
+            # Poll URL every 0.5 seconds to catch JS redirects
             while time.time() - start_time < max_wait:
                 current_url = page.url.lower()
                 if current_url != final_url:
@@ -80,13 +81,12 @@ def detect_inactive_bunnings(url, max_wait=15):
                 time.sleep(0.5)
 
             browser.close()
-            # If parameter never appeared, treat as active
-            return True, final_url
+            return True, final_url  # Active if parameter never appeared
 
     except Exception as e:
-        # ⚠ Treat any Playwright exception as active, do NOT draft
         print("Playwright warning — treating as active:", e)
-        return True, url
+        return True, url  # Never mark active product as draft due to error
+
 
 
 
