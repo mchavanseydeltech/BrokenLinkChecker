@@ -12,8 +12,9 @@ from datetime import datetime
 from urllib.parse import urlparse, parse_qs, quote_plus
 
 # ------------------ HARDCODED CONFIG ------------------
-SHOP = "cassien24.myshopify.com"       # Replace with your Shopify store
-TOKEN = "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"  # Replace with your Shopify access token
+  
+SHOP = "cassien24.myshopify.com"
+TOKEN = "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"
 API_VERSION = "2025-10"
 META_NAMESPACE = "custom"
 META_KEY = "au_link"
