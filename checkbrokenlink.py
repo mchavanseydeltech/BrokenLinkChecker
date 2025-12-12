@@ -40,7 +40,7 @@ class BunningsChecker:
             url = "https://" + url
         return url
 
-   def check_bunnings_url(self, url):
+  def check_bunnings_url(self, url):
     """
     Returns: (is_active: bool, final_url: str, reason: str)
     Only inactive if:
@@ -84,7 +84,6 @@ class BunningsChecker:
 
     except Exception as e:
         return True, url, f"ERROR_{str(e)[:40]}"
-
 
 
 # ------------------ Shopify API ------------------
