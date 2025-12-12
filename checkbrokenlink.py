@@ -1,65 +1,70 @@
 #!/usr/bin/env python3
 """
-Bunnings Product Checker - Only draft truly inactive products
+Bunnings Product Checker using Selenium with retries - works on GitHub Actions
 """
 
-import requests
 import time
-import random
 import csv
+import random
 from datetime import datetime
+import requests
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
 
 # ------------------ CONFIG ------------------
-SHOP = "cassien24.myshopify.com"       # Your Shopify store
+SHOP = "cassien24.myshopify.com"       # Shopify store
 TOKEN = "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"   # Shopify Admin API access token
 API_VERSION = "2025-10"
 META_NAMESPACE = "custom"
 META_KEY = "au_link"
 CSV_FILE = "bunnings_check_results.csv"
+MAX_RETRIES = 3                  # Number of retries if page blocked
+RETRY_DELAY = 5                  # Seconds to wait before retry
 # -------------------------------------------
 
-class BunningsChecker:
-    def __init__(self):
-        self.session = requests.Session()
-        self.setup_headers()
+# ------------------ Selenium Setup ------------------
+def init_driver():
+    options = Options()
+    options.add_argument("--headless=new")       # GitHub Actions compatible
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.add_argument("--disable-blink-features=AutomationControlled")
+    driver = webdriver.Chrome(options=options)
+    return driver
 
-    def setup_headers(self):
-        """Random User-Agent headers"""
-        user_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
-            "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36",
-            "Mozilla/5.0 (iPhone; CPU iPhone OS 16_6 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.6 Mobile/15E148 Safari/604.1"
-        ]
-        self.session.headers.update({"User-Agent": random.choice(user_agents)})
-
-    def normalize_url(self, url):
-        url = url.strip()
-        if not url.startswith(("http://", "https://")):
-            url = "https://" + url
-        return url
-
-    def check_bunnings_url(self, url):
-        """
-        Returns: (is_active: bool, final_url: str, reason: str)
-        Only inactive if:
-          1️⃣ URL contains 'isinactiveproduct=true'
-          2️⃣ HTML shows 'oops', 'not found', 'discontinued', 'unavailable', etc.
-        """
+# ------------------ Bunnings Checker ------------------
+def check_bunnings_url(driver, url):
+    """
+    Returns: (is_active, final_url, reason)
+    Only inactive if:
+      1️⃣ URL contains 'isinactiveproduct=true'
+      2️⃣ HTML shows 'oops', 'not found', 'discontinued', 'unavailable', etc.
+    Implements retries if page blocked.
+    """
+    url = url.strip()
+    for attempt in range(1, MAX_RETRIES + 1):
         try:
-            url = self.normalize_url(url)
-            print(f"Checking: {url}")
-            time.sleep(random.uniform(1, 3))
+            driver.get(url)
+            time.sleep(random.uniform(2, 4))  # wait for page load
+            final_url = driver.current_url.lower()
+            html = driver.page_source.lower()
 
-            resp = self.session.get(url, timeout=15, allow_redirects=True)
-            final_url = resp.url.lower()
-            html = resp.text.lower()
+            # Retry if page looks like blocked
+            blocked_indicators = [
+                "captcha", "access denied", "temporarily unavailable", "unusual traffic"
+            ]
+            if any(b in html for b in blocked_indicators):
+                print(f"⚠ Page blocked detected, retry {attempt}/{MAX_RETRIES}")
+                time.sleep(RETRY_DELAY)
+                continue
 
             # 1️⃣ URL parameter indicating inactive
             if "isinactiveproduct=true" in final_url:
                 return False, final_url, "INACTIVEPARAM"
 
-            # 2️⃣ Check HTML for inactive messages
+            # 2️⃣ Check page content for inactive messages
             inactive_keywords = [
                 "oops",
                 "product is no longer available",
@@ -78,17 +83,19 @@ class BunningsChecker:
                 if kw in html:
                     return False, final_url, f"HTML_INACTIVE ({kw})"
 
-            # Otherwise, active
+            # Otherwise active
             return True, final_url, "ACTIVE"
 
         except Exception as e:
-            return True, url, f"ERROR_{str(e)[:40]}"
+            print(f"⚠ Error on attempt {attempt}: {str(e)[:60]}")
+            time.sleep(RETRY_DELAY)
+            continue
 
+    # If all retries fail, assume active but log warning
+    return True, url, "ASSUMED_ACTIVE_AFTER_RETRIES"
 
 # ------------------ Shopify API ------------------
-
 def fetch_products():
-    """Fetch products from Shopify"""
     query = f"""
     {{
       products(first: 250) {{
@@ -110,9 +117,7 @@ def fetch_products():
     )
     return res.json().get("data", {}).get("products", {}).get("nodes", [])
 
-
 def update_product_to_draft(product_id):
-    """Update Shopify product to DRAFT"""
     mutation = f"""
     mutation {{
       productUpdate(input: {{
@@ -131,21 +136,18 @@ def update_product_to_draft(product_id):
     )
     return res.json()
 
-
 # ------------------ MAIN ------------------
-
 def main():
-    print("\n🚀 Bunnings Link Checker Started")
+    print("\n🚀 Bunnings Checker Started")
     print(f"Time: {datetime.now()}")
-    print("=" * 60)
+    print("="*60)
 
-    checker = BunningsChecker()
+    driver = init_driver()
     products = fetch_products()
     print(f"Found {len(products)} products")
 
     summary = {"active": 0, "inactive": 0, "errors": 0, "reasons": {}}
 
-    # CSV setup
     with open(CSV_FILE, mode="w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(["Product Title", "Shopify Status", "Bunnings URL", "Final URL", "Result", "Reason"])
@@ -164,8 +166,8 @@ def main():
                 print(f"{title} → ⚠ Already DRAFT, skipping")
                 continue
 
-            # Check URL
-            is_active, final_url, reason = checker.check_bunnings_url(url)
+            # Check Bunnings URL
+            is_active, final_url, reason = check_bunnings_url(driver, url)
 
             if not is_active:
                 print(f"{title} → ❌ BROKEN ({reason})")
@@ -185,6 +187,8 @@ def main():
                 writer.writerow([title, status, url, final_url, "ACTIVE", reason])
 
             time.sleep(random.uniform(1, 2))
+
+    driver.quit()
 
     # Summary
     print("\n================= SUMMARY =================")
