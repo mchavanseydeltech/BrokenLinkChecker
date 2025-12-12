@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Bunnings Product Checker - Detect broken links via isinactiveproduct=true
+Bunnings Product Checker - Corrected version
+Detects truly inactive links using isinactiveproduct=true and product content
 """
 
 import requests
@@ -10,17 +11,13 @@ import csv
 from datetime import datetime
 
 # ------------------ CONFIG ------------------
-
 SHOP = "cassien24.myshopify.com"       # Your Shopify store
 TOKEN = "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"   # Shopify Admin API access token
 API_VERSION = "2025-10"
 META_NAMESPACE = "custom"
 META_KEY = "au_link"
-
-CSV_FILE = "bunnings_check_results.csv"  # Output CSV
-
-# ------------------------------------------
-
+CSV_FILE = "bunnings_check_results.csv"
+# -------------------------------------------
 
 class BunningsChecker:
     def __init__(self):
@@ -28,7 +25,7 @@ class BunningsChecker:
         self.setup_headers()
 
     def setup_headers(self):
-        """Set random User-Agent headers"""
+        """Random User-Agent headers"""
         user_agents = [
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.1 Safari/605.1.15",
@@ -44,7 +41,7 @@ class BunningsChecker:
         return url
 
     def check_bunnings_url(self, url):
-        """Check Bunnings URL and detect broken links"""
+        """Check Bunnings URL for true inactivity"""
         try:
             url = self.normalize_url(url)
             print(f"Checking: {url}")
@@ -52,20 +49,21 @@ class BunningsChecker:
 
             resp = self.session.get(url, timeout=15, allow_redirects=True)
             final_url = resp.url.lower()
+            html = resp.text.lower()
 
-            # Check if URL contains the inactive parameter
+            # 1️⃣ Truly inactive if Bunnings adds this parameter
             if "isinactiveproduct=true" in final_url:
                 return False, final_url, "INACTIVEPARAM"
 
-            # Optional: also mark redirects to /search or /category pages as inactive
+            # 2️⃣ Redirect to search page without product → inactive
             if "/search" in final_url and "/product" not in final_url:
                 return False, final_url, "SEARCH_REDIRECT"
 
-            # Basic check: ensure HTML has "Add to Cart" or product info
-            html = resp.text.lower()
-            if "add to cart" not in html and "product" not in html:
+            # 3️⃣ Ensure product exists on the page
+            if "add to cart" not in html and "data-product-id" not in html:
                 return False, final_url, "NO_PRODUCT_CONTENT"
 
+            # Otherwise, considered active
             return True, final_url, "ACTIVE"
 
         except Exception as e:
@@ -156,7 +154,6 @@ def main():
 
             if not is_active:
                 print(f"{title} → ❌ BROKEN ({reason})")
-                # Update Shopify product
                 result = update_product_to_draft(p["id"])
                 user_errors = result.get("data", {}).get("productUpdate", {}).get("userErrors")
                 if user_errors:
@@ -172,7 +169,6 @@ def main():
                 summary["active"] += 1
                 writer.writerow([title, status, url, final_url, "ACTIVE", reason])
 
-            # Sleep to be polite to servers
             time.sleep(random.uniform(1, 2))
 
     # Summary
