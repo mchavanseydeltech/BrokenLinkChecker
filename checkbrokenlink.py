@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Bunnings Product Checker - Corrected version
-Detects truly inactive links using isinactiveproduct=true and product content
+Bunnings Product Checker - Only draft truly inactive products
 """
 
 import requests
@@ -40,50 +39,50 @@ class BunningsChecker:
             url = "https://" + url
         return url
 
-  def check_bunnings_url(self, url):
-    """
-    Returns: (is_active: bool, final_url: str, reason: str)
-    Only inactive if:
-      1️⃣ URL contains 'isinactiveproduct=true'
-      2️⃣ HTML shows 'oops', 'not found', 'discontinued', 'unavailable', etc.
-    """
-    try:
-        url = self.normalize_url(url)
-        print(f"Checking: {url}")
-        time.sleep(random.uniform(1, 3))
+    def check_bunnings_url(self, url):
+        """
+        Returns: (is_active: bool, final_url: str, reason: str)
+        Only inactive if:
+          1️⃣ URL contains 'isinactiveproduct=true'
+          2️⃣ HTML shows 'oops', 'not found', 'discontinued', 'unavailable', etc.
+        """
+        try:
+            url = self.normalize_url(url)
+            print(f"Checking: {url}")
+            time.sleep(random.uniform(1, 3))
 
-        resp = self.session.get(url, timeout=15, allow_redirects=True)
-        final_url = resp.url.lower()
-        html = resp.text.lower()
+            resp = self.session.get(url, timeout=15, allow_redirects=True)
+            final_url = resp.url.lower()
+            html = resp.text.lower()
 
-        # 1️⃣ URL parameter indicating inactive
-        if "isinactiveproduct=true" in final_url:
-            return False, final_url, "INACTIVEPARAM"
+            # 1️⃣ URL parameter indicating inactive
+            if "isinactiveproduct=true" in final_url:
+                return False, final_url, "INACTIVEPARAM"
 
-        # 2️⃣ Check HTML for inactive messages
-        inactive_keywords = [
-            "oops",
-            "product is no longer available",
-            "this product has been discontinued",
-            "product unavailable",
-            "currently unavailable",
-            "no longer stocked",
-            "we couldn't find that product",
-            "404 error",
-            "page not found",
-            "this page doesn't exist",
-            "product not found",
-        ]
+            # 2️⃣ Check HTML for inactive messages
+            inactive_keywords = [
+                "oops",
+                "product is no longer available",
+                "this product has been discontinued",
+                "product unavailable",
+                "currently unavailable",
+                "no longer stocked",
+                "we couldn't find that product",
+                "404 error",
+                "page not found",
+                "this page doesn't exist",
+                "product not found",
+            ]
 
-        for kw in inactive_keywords:
-            if kw in html:
-                return False, final_url, f"HTML_INACTIVE ({kw})"
+            for kw in inactive_keywords:
+                if kw in html:
+                    return False, final_url, f"HTML_INACTIVE ({kw})"
 
-        # Otherwise, active
-        return True, final_url, "ACTIVE"
+            # Otherwise, active
+            return True, final_url, "ACTIVE"
 
-    except Exception as e:
-        return True, url, f"ERROR_{str(e)[:40]}"
+        except Exception as e:
+            return True, url, f"ERROR_{str(e)[:40]}"
 
 
 # ------------------ Shopify API ------------------
