@@ -1,11 +1,12 @@
-import requests
 import time
+import requests
+from playwright.sync_api import sync_playwright
 
 # -------------------------
-# Config (hardcoded)
+# Shopify Config (hardcoded)
 # -------------------------
 SHOPIFY_STORE = "cassien24.myshopify.com"  # replace with your store
-ACCESS_TOKEN = "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"    # replace with your access token
+ACCESS_TOKEN = "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"   # replace with your token
 API_VERSION = "2025-10"
 
 HEADERS = {
@@ -14,12 +15,11 @@ HEADERS = {
 }
 
 # -------------------------
-# Helper Functions
+# Shopify Functions
 # -------------------------
-
 def get_products():
     url = f"https://{SHOPIFY_STORE}/admin/api/{API_VERSION}/products.json"
-    params = {"limit": 250, "status": "active"}  # only active products
+    params = {"limit": 250, "status": "active"}
     res = requests.get(url, headers=HEADERS, params=params)
     res.raise_for_status()
     return res.json()["products"]
@@ -33,61 +33,60 @@ def get_bunnings_url(product_id):
             return mf["value"]
     return None
 
-def is_bunnings_inactive(url):
-    """
-    Returns True if the Bunnings product is inactive
-    """
-    try:
-        r = requests.get(url, allow_redirects=True, timeout=10)
-        final_url = r.url.lower()
-        page = r.text.lower()
-
-        print(f"Checking Bunnings URL: {url}")
-        print(f"Final URL: {final_url}")
-
-        # Case 1: Redirected to search page
-        if "search/products" in final_url:
-            print("Inactive detected: Redirected to search page")
-            return True
-
-        # Case 2: Inactive flag in URL
-        if "inactiveproducttype=bunnings" in final_url:
-            print("Inactive detected: inactiveproducttype flag found")
-            return True
-
-        # Case 3: Missing main product container
-        # Adjust the selector based on live Bunnings product page HTML
-        if "product__details" not in page and "product__title" not in page:
-            print("Inactive detected: main product container missing")
-            return True
-
-        # Product looks active
-        print("Product is active")
-        return False
-
-    except Exception as e:
-        print(f"⚠️ Error checking URL {url}: {e}")
-        return False
-
 def make_product_draft(product_id):
-    """
-    Set Shopify product status to draft
-    """
     url = f"https://{SHOPIFY_STORE}/admin/api/{API_VERSION}/products/{product_id}.json"
-    payload = {
-        "product": {
-            "id": product_id,
-            "status": "draft"
-        }
-    }
+    payload = {"product": {"id": product_id, "status": "draft"}}
     r = requests.put(url, json=payload, headers=HEADERS)
     r.raise_for_status()
     print(f"✅ Product {product_id} moved to DRAFT")
 
 # -------------------------
+# Bunnings Detection
+# -------------------------
+def is_bunnings_inactive(url):
+    """
+    Returns True if the Bunnings product is inactive
+    Uses headless browser to handle JS redirects and blocks
+    """
+    try:
+        with sync_playwright() as p:
+            browser = p.chromium.launch(headless=True)
+            page = browser.new_page()
+            page.goto(url, timeout=20000)  # 20 seconds max
+            time.sleep(1)  # wait for page scripts
+
+            final_url = page.url.lower()
+            content = page.content().lower()
+            browser.close()
+
+            print(f"Checking URL: {url}")
+            print(f"Final URL: {final_url}")
+
+            # Case 1: Redirect to search
+            if "search/products" in final_url:
+                print("Inactive detected: Redirected to search page")
+                return True
+
+            # Case 2: Inactive flag in URL
+            if "inactiveproducttype=bunnings" in final_url:
+                print("Inactive detected: inactiveproducttype flag found")
+                return True
+
+            # Case 3: Missing main product container (adjust selector if needed)
+            if "product__details" not in content and "product__title" not in content:
+                print("Inactive detected: main product container missing")
+                return True
+
+            print("Product is active")
+            return False
+
+    except Exception as e:
+        print(f"⚠️ Error checking URL {url}: {e}")
+        return False
+
+# -------------------------
 # Main Runner
 # -------------------------
-
 def main():
     products = get_products()
     print(f"Found {len(products)} active products in Shopify")
@@ -105,8 +104,7 @@ def main():
         else:
             print(f"Product {product_id} remains active")
 
-        # Rate-limit safety
-        time.sleep(0.5)
+        time.sleep(1)  # rate-limit safety
 
 if __name__ == "__main__":
     main()
