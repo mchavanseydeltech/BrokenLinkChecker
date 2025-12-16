@@ -19,7 +19,7 @@ SHOPIFY_TOKEN = "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"
 API_VERSION = "2025-10"
 
 METAFIELD_NAMESPACE = "custom"
-METAFIELD_KEY = "bunnings_url"
+METAFIELD_KEY = "au_link"
 
 HEADERS = {
     "X-Shopify-Access-Token": SHOPIFY_TOKEN,
