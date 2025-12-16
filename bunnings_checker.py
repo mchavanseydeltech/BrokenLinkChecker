@@ -1,11 +1,10 @@
 #!/usr/bin/env python3
 """
 Automated Bunnings URL Checker - Shopify Metafields
-Fetches Bunnings URLs from Shopify products and checks Add to Cart button
+If Add to Cart button not found, product is set to DRAFT
 """
 
 import time
-import csv
 from datetime import datetime
 import requests
 from selenium.webdriver.common.by import By
@@ -14,8 +13,8 @@ import undetected_chromedriver as uc
 # --------------------------
 # HARD-CODED SHOPIFY CREDENTIALS
 # --------------------------
-SHOPIFY_STORE = "cassien24.myshopify.com"  # e.g., 'myshopify-store.myshopify.com'
-SHOPIFY_ACCESS_TOKEN = "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"
+SHOPIFY_STORE = "cassien24.myshopify.com"  # Replace with your Shopify store
+SHOPIFY_ACCESS_TOKEN = "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"  # Replace with your token
 
 METAFIELD_NAMESPACE = "custom"
 METAFIELD_KEY = "au_link"
@@ -153,38 +152,6 @@ class BunningsDirectChecker:
 
         return result
 
-    def save_results_csv(self, results, filename):
-        with open(filename, 'w', newline='', encoding='utf-8') as csvfile:
-            fieldnames = ['Bunnings_URL','Page_Title','Status','Working','Add_to_Cart_Found','Error','Test_Time']
-            writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
-            writer.writeheader()
-            for r in results:
-                writer.writerow({
-                    'Bunnings_URL': r['url'],
-                    'Page_Title': r['page_title'][:200] if r['page_title'] else '',
-                    'Status': r['status'],
-                    'Working': 'Yes' if r['is_working'] else 'No',
-                    'Add_to_Cart_Found': 'Yes' if r['add_to_cart_found'] else 'No',
-                    'Error': r['error'] or '',
-                    'Test_Time': r['timestamp']
-                })
-        print(f"\n📊 Results saved to: {filename}")
-
-    def print_summary(self, results):
-        working = sum(1 for r in results if r['is_working'])
-        broken = len(results) - working
-        print("\n📋 SUMMARY")
-        print("="*40)
-        print(f"Total URLs Tested: {len(results)}")
-        print(f"✅ Working: {working}")
-        print(f"❌ Broken: {broken}")
-        status_counts = {}
-        for r in results:
-            status_counts[r['status']] = status_counts.get(r['status'],0)+1
-        print("\n📈 Breakdown by status:")
-        for status, count in sorted(status_counts.items()):
-            print(f"  {status}: {count}")
-
     def close(self):
         if self.driver:
             try:
@@ -194,10 +161,11 @@ class BunningsDirectChecker:
                 pass
 
 # --------------------------
-# FETCH SHOPIFY METAFIELDS
+# SHOPIFY FUNCTIONS
 # --------------------------
-def fetch_bunnings_urls():
-    urls = []
+def fetch_products_with_bunnings_url():
+    """Fetch products and their Bunnings URLs"""
+    products_data = []
     endpoint = f"https://{SHOPIFY_STORE}/admin/api/2025-10/products.json?limit=250"
     headers = {"X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,"Content-Type":"application/json"}
 
@@ -210,38 +178,59 @@ def fetch_bunnings_urls():
             for mf in metafields:
                 if mf["namespace"] == METAFIELD_NAMESPACE and mf["key"] == METAFIELD_KEY:
                     if mf["value"]:
-                        urls.append(mf["value"])
-        # Pagination
+                        products_data.append({"id": product['id'], "url": mf["value"], "title": product["title"]})
         link_header = resp.headers.get("Link")
         if link_header and 'rel="next"' in link_header:
             next_url = link_header.split(';')[0].strip('<> ')
             endpoint = next_url
         else:
             endpoint = None
-    return urls
+    return products_data
+
+def mark_product_as_draft(product_id):
+    """Set Shopify product to draft"""
+    endpoint = f"https://{SHOPIFY_STORE}/admin/api/2025-10/products/{product_id}.json"
+    headers = {
+        "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+        "Content-Type": "application/json"
+    }
+    payload = {"product": {"id": product_id, "status": "draft"}}
+    resp = requests.put(endpoint, json=payload, headers=headers)
+    if resp.status_code == 200:
+        print(f"   📝 Product {product_id} set to DRAFT")
+    else:
+        print(f"   ❌ Failed to update product {product_id}: {resp.text}")
 
 # --------------------------
 # MAIN SCRIPT
 # --------------------------
 if __name__ == "__main__":
-    print("🚀 Fetching Bunnings URLs from Shopify...")
-    bunnings_urls = fetch_bunnings_urls()
-    print(f"✅ Found {len(bunnings_urls)} URLs")
+    print("🚀 Fetching products with Bunnings URLs from Shopify...")
+    products_data = fetch_products_with_bunnings_url()
+    print(f"✅ Found {len(products_data)} products with Bunnings URLs")
 
-    if not bunnings_urls:
-        print("❌ No URLs found. Check metafields.")
+    if not products_data:
+        print("❌ No products found. Check metafields.")
         exit(0)
 
     checker = BunningsDirectChecker(headless=False)
-    results = []
+    total_working = 0
+    total_drafted = 0
 
-    for i, url in enumerate(bunnings_urls,1):
-        print(f"\n[{i}/{len(bunnings_urls)}]")
-        result = checker.check_bunnings_url(url)
-        results.append(result)
+    for i, product in enumerate(products_data, 1):
+        print(f"\n[{i}/{len(products_data)}] {product['title']}")
+        result = checker.check_bunnings_url(product['url'])
+        if result['add_to_cart_found']:
+            total_working += 1
+        else:
+            mark_product_as_draft(product['id'])
+            total_drafted += 1
         time.sleep(2)
 
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    checker.save_results_csv(results, f"bunnings_results_{timestamp}.csv")
-    checker.print_summary(results)
     checker.close()
+
+    print("\n📋 SUMMARY")
+    print("="*40)
+    print(f"Total Products Tested: {len(products_data)}")
+    print(f"✅ Working (Add to Cart found): {total_working}")
+    print(f"📝 Drafted Products (Add to Cart NOT found): {total_drafted}")
