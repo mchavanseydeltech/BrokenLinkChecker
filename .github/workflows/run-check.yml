@@ -38,4 +38,4 @@ jobs:
       # 5. Run the Python script
       - name: Run Bunnings URL Checker
         run: |
-          python shopify_bunnings_checker.py
+          python bunnings_checker.py
