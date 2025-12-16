@@ -1,418 +1,118 @@
-name: Bunnings Link Checker
+name: Bunnings Check
 
 on:
-  # Run daily at 3 AM UTC
   schedule:
-    - cron: '0 3 * * *'
-  
-  # Allow manual triggers from GitHub UI
-  workflow_dispatch:
-    inputs:
-      auto_draft:
-        description: 'Auto-draft broken products?'
-        required: false
-        default: 'false'
-        type: boolean
-      test_mode:
-        description: 'Run in test mode (no real changes)'
-        required: false
-        default: 'false'
-        type: boolean
-
-env:
-  PYTHON_VERSION: '3.10'
-  SHOPIFY_METAFIELD_NAMESPACE: 'custom'
-  SHOPIFY_METAFIELD_KEY: 'bunnings_url'
+    - cron: '0 3 * * *'  # Daily at 3 AM
+  workflow_dispatch:      # Manual trigger
 
 jobs:
-  check-bunnings-links:
+  check:
     runs-on: ubuntu-latest
     
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@v3
-      
-    - name: Set up Python
-      uses: actions/setup-python@v4
-      with:
-        python-version: ${{ env.PYTHON_VERSION }}
-        
-    - name: Install system dependencies
+    - uses: actions/checkout@v3
+    
+    - name: Setup
       run: |
-        sudo apt-get update
-        sudo apt-get install -y wget unzip gnupg
-        
-    - name: Install Chrome and ChromeDriver
-      run: |
-        # Install Google Chrome
-        wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+        sudo apt update
+        wget -q -O - https://dl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
         echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
-        sudo apt-get update
-        sudo apt-get install -y google-chrome-stable
+        sudo apt update
+        sudo apt install -y google-chrome-stable python3-pip
+        pip3 install selenium requests
         
-        # Install ChromeDriver matching Chrome version
-        CHROME_VERSION=$(google-chrome --version | awk '{print $3}' | cut -d'.' -f1)
-        echo "Chrome version: $CHROME_VERSION"
-        
-        # Get matching ChromeDriver version
-        CHROMEDRIVER_VERSION=$(curl -s "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_$CHROME_VERSION")
-        echo "ChromeDriver version: $CHROMEDRIVER_VERSION"
-        
-        wget -q "https://chromedriver.storage.googleapis.com/$CHROMEDRIVER_VERSION/chromedriver_linux64.zip"
-        unzip chromedriver_linux64.zip
-        sudo mv chromedriver /usr/local/bin/
-        sudo chmod +x /usr/local/bin/chromedriver
-        
-    - name: Install Python dependencies
+    - name: Create and run script
       run: |
-        python -m pip install --upgrade pip
-        pip install selenium undetected-chromedriver requests
-        
-    - name: Create Python script with configuration
-      run: |
-        # Create the Python script from a template or use existing one
-        # If you have the script in your repo, this step is not needed
-        # This shows how to inject secrets into a script
-        cat > bunnings_checker_ci.py << 'EOF'
-#!/usr/bin/env python3
-"""
-Bunnings URL Checker - CI/CD Version
-"""
-import time
-import os
-import csv
-import requests
-import json
-import sys
+        cat > check.py << 'EOF'
+import requests, time, csv, os
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.common.by import By
-import undetected_chromedriver as uc
 
-# Configuration from environment variables
-SHOPIFY_STORE_DOMAIN = os.environ.get('SHOPIFY_STORE_DOMAIN', '')
-SHOPIFY_ACCESS_TOKEN = os.environ.get('SHOPIFY_ACCESS_TOKEN', '')
-METAFIELD_NAMESPACE = os.environ.get('SHOPIFY_METAFIELD_NAMESPACE', 'custom')
-METAFIELD_KEY = os.environ.get('SHOPIFY_METAFIELD_KEY', 'bunnings_url')
-RUN_IN_HEADLESS = True  # Always headless in CI
+# ========== HARDCODED SECRETS ==========
+SHOP_DOMAIN = "cassien24.myshopify.com"  # ← CHANGE
+ACCESS_TOKEN = "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"         # ← CHANGE
+# =======================================
 
-class BunningsCIBot:
-    def __init__(self):
-        self.driver = None
-        self.shopify_headers = {
-            "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
-            "Content-Type": "application/json"
-        }
-        self.setup_driver()
+print("Starting Bunnings Check...")
+options = webdriver.ChromeOptions()
+options.add_argument('--headless')
+options.add_argument('--no-sandbox')
+driver = webdriver.Chrome(options=options)
+
+try:
+    # Fetch products
+    headers = {"X-Shopify-Access-Token": ACCESS_TOKEN}
+    products = []
+    url = f"https://{SHOP_DOMAIN}/admin/api/2024-01/products.json?limit=250"
     
-    def setup_driver(self):
-        """Setup browser for CI environment"""
-        try:
-            options = uc.ChromeOptions()
-            options.add_argument('--headless=new')
-            options.add_argument('--no-sandbox')
-            options.add_argument('--disable-dev-shm-usage')
-            options.add_argument('--disable-gpu')
-            options.add_argument('--window-size=1920,1080')
-            options.add_argument('--disable-blink-features=AutomationControlled')
-            
-            # Additional CI optimizations
-            options.add_argument('--disable-extensions')
-            options.add_argument('--disable-software-rasterizer')
-            options.add_argument('--disable-background-networking')
-            
-            user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            options.add_argument(f'user-agent={user_agent}')
-            
-            self.driver = uc.Chrome(options=options, use_subprocess=True)
-            print("✅ Browser ready in CI mode")
-            
-        except Exception as e:
-            print(f"❌ Browser setup failed: {e}")
-            # Fallback to regular ChromeDriver
-            try:
-                from selenium import webdriver
-                chrome_options = webdriver.ChromeOptions()
-                chrome_options.add_argument('--headless')
-                chrome_options.add_argument('--no-sandbox')
-                chrome_options.add_argument('--disable-dev-shm-usage')
-                self.driver = webdriver.Chrome(options=chrome_options)
-                print("✅ Browser ready (fallback mode)")
-            except Exception as e2:
-                print(f"❌ Fallback also failed: {e2}")
-                raise
+    response = requests.get(url, headers=headers)
+    for product in response.json().get('products', []):
+        for metafield in product.get('metafields', []):
+            if metafield.get('namespace') == 'custom' and metafield.get('key') == 'au_link':
+                bunnings_url = metafield.get('value')
+                if bunnings_url:
+                    products.append({
+                        'id': product['id'],
+                        'title': product['title'],
+                        'url': bunnings_url
+                    })
     
-    def fetch_products(self):
-        """Fetch products with Bunnings URLs"""
-        print("📡 Fetching products from Shopify...")
-        
-        if not SHOPIFY_STORE_DOMAIN or not SHOPIFY_ACCESS_TOKEN:
-            print("❌ Shopify credentials not configured")
-            return []
-        
-        products = []
-        url = f"https://{SHOPIFY_STORE_DOMAIN}/admin/api/2024-01/products.json?limit=250&fields=id,title,handle,metafields"
-        
-        try:
-            while url:
-                response = requests.get(url, headers=self.shopify_headers)
-                
-                if response.status_code != 200:
-                    print(f"❌ API Error {response.status_code}: {response.text[:200]}")
-                    break
-                
-                data = response.json()
-                for product in data.get('products', []):
-                    for metafield in product.get('metafields', []):
-                        if (metafield.get('namespace') == METAFIELD_NAMESPACE and 
-                            metafield.get('key') == METAFIELD_KEY):
-                            bunnings_url = metafield.get('value')
-                            if bunnings_url and 'bunnings.com.au' in bunnings_url.lower():
-                                products.append({
-                                    'id': product['id'],
-                                    'title': product['title'],
-                                    'handle': product.get('handle', ''),
-                                    'url': bunnings_url
-                                })
-                                print(f"   ✓ {product['title'][:50]}...")
-                                break
-                
-                # Pagination
-                link = response.headers.get('Link', '')
-                if 'rel="next"' in link:
-                    import re
-                    match = re.search(r'<([^>]+)>; rel="next"', link)
-                    url = match.group(1) if match else None
-                else:
-                    url = None
-                
-                time.sleep(0.3)  # Rate limiting
-            
-            print(f"✅ Found {len(products)} products")
-            
-        except Exception as e:
-            print(f"❌ Error fetching products: {e}")
-        
-        return products
+    print(f"Found {len(products)} products")
     
-    def check_url(self, url):
-        """Check if Bunnings URL is working"""
-        print(f"🔗 Checking: {url[:60]}...")
-        
-        result = {
-            'url': url,
-            'working': False,
-            'status': 'error',
-            'error': None
-        }
-        
+    # Check each URL
+    results = []
+    for product in products:
+        print(f"Checking: {product['title'][:30]}...")
         try:
-            self.driver.get(url)
+            driver.get(product['url'])
             time.sleep(5)
+            page_text = driver.page_source.lower()
             
-            # Check for common issues
-            page_source = self.driver.page_source.lower()
-            title = self.driver.title.lower()
-            
-            if 'just a moment' in title:
-                result['status'] = 'cloudflare_blocked'
-            elif 'out of stock' in page_source:
-                result['status'] = 'out_of_stock'
-            elif '404' in page_source or 'not found' in page_source:
-                result['status'] = 'not_found'
-            elif 'bunnings' not in page_source:
-                result['status'] = 'not_bunnings'
+            if 'add to cart' in page_text or 'add to trolley' in page_text:
+                status = 'working'
+                working = True
+            elif 'out of stock' in page_text:
+                status = 'out_of_stock'
+                working = False
             else:
-                # Look for Add to Cart button
-                cart_selectors = [
-                    "button:contains('Add to Cart')",
-                    "button:contains('Add to Trolley')",
-                    "[data-testid*='add-to-cart']",
-                    ".add-to-cart-button"
-                ]
-                
-                found = False
-                for selector in cart_selectors:
-                    try:
-                        elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                        for element in elements:
-                            if element.is_displayed():
-                                found = True
-                                break
-                        if found:
-                            break
-                    except:
-                        continue
-                
-                if found:
-                    result['working'] = True
-                    result['status'] = 'working'
-                    print("   ✅ Working")
-                else:
-                    result['status'] = 'no_add_to_cart'
-                    print("   ❌ No Add to Cart button")
-            
-        except Exception as e:
-            result['error'] = str(e)
-            print(f"   ❌ Error: {str(e)[:50]}")
+                status = 'not_working'
+                working = False
+        except:
+            status = 'error'
+            working = False
         
-        return result
+        results.append({
+            'product': product['title'],
+            'url': product['url'],
+            'status': status,
+            'working': working
+        })
+        time.sleep(1)
     
-    def run_checks(self):
-        """Main checking function"""
-        products = self.fetch_products()
-        
-        if not products:
-            print("❌ No products to check")
-            return []
-        
-        results = []
-        print(f"\n🔍 Checking {len(products)} URLs...")
-        
-        for i, product in enumerate(products, 1):
-            print(f"\n[{i}/{len(products)}] {product['title'][:50]}...")
-            
-            check_result = self.check_url(product['url'])
-            check_result.update({
-                'product_id': product['id'],
-                'product_title': product['title'],
-                'product_handle': product['handle']
-            })
-            
-            results.append(check_result)
-            
-            # Delay between checks
-            if i < len(products):
-                time.sleep(2)
-        
-        return results
+    # Save results
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M')
+    filename = f'results_{timestamp}.csv'
+    with open(filename, 'w') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Product', 'URL', 'Status', 'Working'])
+        for r in results:
+            writer.writerow([r['product'], r['url'], r['status'], 'Yes' if r['working'] else 'No'])
     
-    def save_results(self, results):
-        """Save results to CSV"""
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        filename = f'bunnings_results_{timestamp}.csv'
-        
-        with open(filename, 'w', newline='') as f:
-            writer = csv.writer(f)
-            writer.writerow(['Product ID', 'Product Title', 'URL', 'Status', 'Working', 'Error'])
-            
-            for r in results:
-                writer.writerow([
-                    r.get('product_id', ''),
-                    r.get('product_title', '')[:100],
-                    r.get('url', ''),
-                    r.get('status', ''),
-                    'Yes' if r.get('working') else 'No',
-                    r.get('error', '')
-                ])
-        
-        print(f"\n📊 Saved results to {filename}")
-        return filename
+    print(f"Saved to {filename}")
     
-    def close(self):
-        """Cleanup"""
-        if self.driver:
-            try:
-                self.driver.quit()
-            except:
-                pass
-
-# Main execution
-if __name__ == "__main__":
-    print("🚀 Starting Bunnings URL Checker in CI mode")
-    print("=" * 60)
-    
-    # Validate credentials
-    if not SHOPIFY_STORE_DOMAIN or not SHOPIFY_ACCESS_TOKEN:
-        print("❌ Missing Shopify credentials")
-        print("Please set SHOPIFY_STORE_DOMAIN and SHOPIFY_ACCESS_TOKEN environment variables")
-        sys.exit(1)
-    
-    bot = None
-    try:
-        bot = BunningsCIBot()
-        results = bot.run_checks()
-        
-        if results:
-            csv_file = bot.save_results(results)
-            
-            # Summary
-            working = sum(1 for r in results if r.get('working'))
-            print(f"\n📋 SUMMARY")
-            print(f"Total checked: {len(results)}")
-            print(f"✅ Working: {working}")
-            print(f"❌ Broken: {len(results) - working}")
-            
-            # Upload artifact (for GitHub Actions)
-            if os.getenv('GITHUB_ACTIONS'):
-                print(f"📤 Results will be uploaded as artifact")
-        else:
-            print("❌ No results generated")
-            
-    except Exception as e:
-        print(f"❌ Fatal error: {e}")
-        sys.exit(1)
-    finally:
-        if bot:
-            bot.close()
-    
-    print("\n✨ Check completed!")
+finally:
+    driver.quit()
 EOF
+
+        # Replace placeholders with YOUR actual values
+        sed -i "s/YOUR-ACTUAL-STORE/your-real-store-name/g" check.py
+        sed -i "s/shpat_YOUR_ACTUAL_TOKEN/your-real-access-token/g" check.py
         
-        # Make it executable
-        chmod +x bunnings_checker_ci.py
+        python3 check.py
         
-    - name: Run Bunnings URL Checker
-      env:
-        SHOPIFY_STORE_DOMAIN: ${{ secrets.SHOPIFY_STORE_DOMAIN }}
-        SHOPIFY_ACCESS_TOKEN: ${{ secrets.SHOPIFY_ACCESS_TOKEN }}
-        SHOPIFY_METAFIELD_NAMESPACE: ${{ env.SHOPIFY_METAFIELD_NAMESPACE }}
-        SHOPIFY_METAFIELD_KEY: ${{ env.SHOPIFY_METAFIELD_KEY }}
-      run: |
-        python bunnings_checker_ci.py
-        
-    - name: Upload results as artifact
+    - name: Upload results
       uses: actions/upload-artifact@v3
       with:
-        name: bunnings-check-results
-        path: bunnings_results_*.csv
-        retention-days: 30
-        
-    - name: Send notification on success
-      if: success()
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 465
-        username: ${{ secrets.EMAIL_USERNAME }}
-        password: ${{ secrets.EMAIL_PASSWORD }}
-        subject: ✅ Bunnings Link Check Completed
-        to: ${{ secrets.NOTIFICATION_EMAIL }}
-        body: |
-          Bunnings URL check completed successfully!
-          
-          Download the attached CSV for detailed results.
-          
-          Workflow: ${{ github.workflow }}
-          Run: ${{ github.run_number }}
-          Commit: ${{ github.sha }}
-        attachments: bunnings_results_*.csv
-        
-    - name: Send notification on failure
-      if: failure()
-      uses: dawidd6/action-send-mail@v3
-      with:
-        server_address: smtp.gmail.com
-        server_port: 465
-        username: ${{ secrets.EMAIL_USERNAME }}
-        password: ${{ secrets.EMAIL_PASSWORD }}
-        subject: 🚨 Bunnings Link Check Failed
-        to: ${{ secrets.NOTIFICATION_EMAIL }}
-        body: |
-          Bunnings URL check failed!
-          
-          Check the workflow run for details: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-          
-          Workflow: ${{ github.workflow }}
-          Run: ${{ github.run_number }}
-          Status: Failed
+        name: results
+        path: results_*.csv
