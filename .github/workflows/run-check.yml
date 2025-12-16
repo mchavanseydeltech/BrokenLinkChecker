@@ -117,9 +117,10 @@ finally:
     driver.quit()
 EOF
 
+     
         # Replace placeholders with YOUR actual values
-        sed -i "s/YOUR-ACTUAL-STORE/cassien24.myshopify.com/g" bunnings_checker.py
-        sed -i "s/shpat_YOUR_ACTUAL_TOKEN/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/g" bunnings_checker.py
+        sed -i "s/YOUR-ACTUAL-STORE/your-real-store-name/g" check.py
+        sed -i "s/shpat_YOUR_ACTUAL_TOKEN/your-real-access-token/g" check.py
         
         python3 check.py
         
