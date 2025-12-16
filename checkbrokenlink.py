@@ -28,7 +28,7 @@ def get_bunnings_url(product_id):
     res = requests.get(url, headers=HEADERS)
     res.raise_for_status()
     for mf in res.json()["metafields"]:
-        if mf["namespace"] == "custom" and mf["key"] == "bunnings_url":
+        if mf["namespace"] == "custom" and mf["key"] == "au_link":
             return mf["value"]
     return None
 
