@@ -3,25 +3,31 @@ name: Bunnings Inactive Product Check
 on:
   schedule:
     - cron: "0 3 * * *"   # Daily at 3 AM UTC
-  workflow_dispatch:
+  workflow_dispatch:       # Manual trigger
 
 jobs:
   check-bunnings:
     runs-on: ubuntu-latest
 
     steps:
+      # 1️⃣ Checkout repo
       - name: Checkout repo
         uses: actions/checkout@v4
 
+      # 2️⃣ Set up Python
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
+      # 3️⃣ Install dependencies
       - name: Install dependencies
         run: |
-          pip install -r requirements.txt
+          python -m pip install --upgrade pip
+          pip install playwright requests
+          playwright install chromium
 
+      # 4️⃣ Run the Bunnings draft script
       - name: Run inactive product check
         run: |
           python checkbrokenlink.py
