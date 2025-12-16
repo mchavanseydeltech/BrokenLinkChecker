@@ -1,33 +1,40 @@
-name: Bunnings Inactive Product Check
+name: Bunnings URL Checker
 
 on:
   schedule:
-    - cron: "0 3 * * *"   # Daily at 3 AM UTC
-  workflow_dispatch:       # Manual trigger
+    # Runs daily at 02:00 UTC
+    - cron: '0 2 * * *'
+  workflow_dispatch:  # Allows manual trigger from GitHub Actions tab
 
 jobs:
-  check-bunnings:
+  check_bunnings_urls:
     runs-on: ubuntu-latest
 
     steps:
-      # 1️⃣ Checkout repo
-      - name: Checkout repo
-        uses: actions/checkout@v4
+      # Step 1: Checkout repo
+      - name: Checkout repository
+        uses: actions/checkout@v3
 
-      # 2️⃣ Set up Python
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      # Step 2: Setup Python
+      - name: Setup Python 3.11
+        uses: actions/setup-python@v4
         with:
-          python-version: "3.11"
+          python-version: '3.11'
 
-      # 3️⃣ Install dependencies
+      # Step 3: Install dependencies
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install playwright requests
-          playwright install chromium
+          pip install selenium undetected-chromedriver requests
 
-      # 4️⃣ Run the Bunnings draft script
-      - name: Run inactive product check
+      # Step 4: Run Bunnings Checker
+      - name: Run Bunnings URL Checker
         run: |
-          python checkbrokenlink.py
+          python3 bunnings_checker.py
+
+      # Optional: Upload results as artifact (if saving CSV)
+      # - name: Upload CSV results
+      #   uses: actions/upload-artifact@v3
+      #   with:
+      #     name: bunnings-results
+      #     path: bunnings_results_*.csv
