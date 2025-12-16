@@ -106,10 +106,10 @@ finally:
 EOF
 
         # Replace placeholders with YOUR actual values
-        sed -i "s/YOUR-ACTUAL-STORE/your-real-store-name/g" check.py
-        sed -i "s/shpat_YOUR_ACTUAL_TOKEN/your-real-access-token/g" check.py
+        sed -i "s/YOUR-ACTUAL-STORE/your-real-store-name/g" bunnings_checker.py
+        sed -i "s/shpat_YOUR_ACTUAL_TOKEN/your-real-access-token/g" bunnings_checker.py
         
-        python3 check.py
+        python3 bunnings_checker.py
         
     - name: Upload results
       uses: actions/upload-artifact@v3
