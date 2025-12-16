@@ -33,58 +33,113 @@ jobs:
         # Install Python packages
         pip3 install selenium==4.15.0 undetected-chromedriver==3.5.4 requests==2.31.0
         
-    - name: Configure script with hardcoded secrets
+    - name: Create and run script
       run: |
-        echo "📝 Configuring bunnings_checker.py with your secrets..."
+        cat > check.py << 'EOF'
+import requests, time, csv, os
+from datetime import datetime
+from selenium import webdriver
+from selenium.webdriver.common.by import By
+
+# ========== HARDCODED SECRETS ==========
+SHOP_DOMAIN = "cassien24.myshopify.com"  # ← CHANGE
+ACCESS_TOKEN = "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"         # ← CHANGE
+# =======================================
+
+print("Starting Bunnings Check...")
+options = webdriver.ChromeOptions()
+options.add_argument('--headless')
+options.add_argument('--no-sandbox')
+driver = webdriver.Chrome(options=options)
+
+try:
+    # Fetch products
+    headers = {"X-Shopify-Access-Token": ACCESS_TOKEN}
+    products = []
+    url = f"https://{SHOP_DOMAIN}/admin/api/2024-01/products.json?limit=250"
+    
+    response = requests.get(url, headers=headers)
+    for product in response.json().get('products', []):
+        for metafield in product.get('metafields', []):
+            if metafield.get('namespace') == 'custom' and metafield.get('key') == 'au_link':
+                bunnings_url = metafield.get('value')
+                if bunnings_url:
+                    products.append({
+                        'id': product['id'],
+                        'title': product['title'],
+                        'url': bunnings_url
+                    })
+    
+    print(f"Found {len(products)} products")
+    
+    # Check each URL
+    results = []
+    for product in products:
+        print(f"Checking: {product['title'][:30]}...")
+        try:
+            driver.get(product['url'])
+            time.sleep(5)
+            page_text = driver.page_source.lower()
+            
+            if 'add to cart' in page_text or 'add to trolley' in page_text:
+                status = 'working'
+                working = True
+            elif 'out of stock' in page_text:
+                status = 'out_of_stock'
+                working = False
+            else:
+                status = 'not_working'
+                working = False
+        except:
+            status = 'error'
+            working = False
         
-        # Make sure your script exists
-        if [ ! -f "bunnings_checker.py" ]; then
-          echo "❌ ERROR: bunnings_checker.py not found in repository!"
-          echo "Please make sure your script is committed to the repository."
-          exit 1
-        fi
+        results.append({
+            'product': product['title'],
+            'url': product['url'],
+            'status': status,
+            'working': working
+        })
+        time.sleep(1)
+    
+    # Save results
+    timestamp = datetime.now().strftime('%Y%m%d_%H%M')
+    filename = f'results_{timestamp}.csv'
+    with open(filename, 'w') as f:
+        writer = csv.writer(f)
+        writer.writerow(['Product', 'URL', 'Status', 'Working'])
+        for r in results:
+            writer.writerow([r['product'], r['url'], r['status'], 'Yes' if r['working'] else 'No'])
+    
+    print(f"Saved to {filename}")
+    
+finally:
+    driver.quit()
+EOF
+
+        # Replace placeholders with YOUR actual values
+        sed -i "s/YOUR-ACTUAL-STORE/cassien24.myshopify.com/g" bunnings_checker.py
+        sed -i "s/shpat_YOUR_ACTUAL_TOKEN/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/g" bunnings_checker.py
         
-        # Check current configuration in your script
-        echo "Current configuration in your script:"
-        grep -A2 -B2 "SHOPIFY" bunnings_checker.py || echo "No SHOPIFY config found"
-        
-        # IMPORTANT: Update your bunnings_checker.py file FIRST with your actual secrets
-        # The script should already have hardcoded values like:
-        # SHOPIFY_STORE_DOMAIN = "cassien24.myshopify.com"
-        # SHOPIFY_ACCESS_TOKEN = "shpat_your_actual_token"
-        
-        echo ""
-        echo "✅ Assuming your bunnings_checker.py already has correct hardcoded values"
-        echo "   If not, update the file in your repository before running this workflow"
-        
-    - name: Run Bunnings Checker
-      run: |
-        echo "🚀 Running your bunnings_checker.py script..."
-        python3 bunnings_checker.py
+        python3 check.py
         
     - name: Upload results
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4  # CHANGED FROM v3 to v4
       with:
-        name: bunnings-check-results
-        path: |
-          bunnings_results_*.csv
-          direct_test_results_*.csv
-          shopify_test_results_*.csv
-          results_*.csv
-        retention-days: 30
+        name: results
+        path: results_*.csv
         
     - name: Display completion message
-      if: always()
       run: |
         echo "=========================================="
-        echo "🏁 Workflow Completed!"
+        echo "🏁 Bunnings Check Completed!"
         echo "=========================================="
-        echo ""
-        echo "Generated files:"
-        ls -la *.csv 2>/dev/null || echo "No CSV files generated"
         echo ""
         echo "To download results:"
         echo "1. Go to this workflow run"
         echo "2. Scroll to 'Artifacts' section"
-        echo "3. Download 'bunnings-check-results'"
+        echo "3. Download 'results'"
+        echo ""
+        echo "Files available for download:"
+        ls -la results_*.csv 2>/dev/null || echo "No CSV files found"
         echo "=========================================="
