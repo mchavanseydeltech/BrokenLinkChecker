@@ -3,7 +3,7 @@ import time
 
 SHOPIFY_STORE = "cassien24.myshopify.com"
 ACCESS_TOKEN = "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"
-API_VERSION = "2025-01"
+API_VERSION = "2025-10"
 
 HEADERS = {
     "X-Shopify-Access-Token": ACCESS_TOKEN,
@@ -23,7 +23,7 @@ def get_bunnings_url(product_id):
     res.raise_for_status()
 
     for mf in res.json()["metafields"]:
-        if mf["namespace"] == "custom" and mf["key"] == "bunnings_url":
+        if mf["namespace"] == "custom" and mf["key"] == "au_link":
             return mf["value"]
     return None
 
