@@ -2,7 +2,7 @@
 """
 Bunnings URL Checker – Shopify Metafield Mode
 Fetches all Bunnings URLs from product metafields (all products)
-Handles plain URLs or JSON-stored URLs
+Detects URLs in plain text or JSON, with debug printing
 Checks each URL for Add to Cart button using Selenium (headless)
 """
 
@@ -22,7 +22,7 @@ SHOPIFY_TOKEN = "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"
 SHOPIFY_API_VERSION = "2025-10"
 
 METAFIELD_NAMESPACE = "custom"
-METAFIELD_KEY = "bunnings_au_link"
+METAFIELD_KEY = "bunnings_url"
 # =========================
 
 class BunningsChecker:
@@ -63,18 +63,21 @@ class BunningsChecker:
             r = requests.get(endpoint, headers=headers, params=params)
             r.raise_for_status()
             products = r.json().get("products", [])
-
             if not products:
                 break
 
-           for product in products:
-            pid = product["id"]
-            mf_resp = requests.get(f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products/{pid}/metafields.json", headers=headers)
-            mf_resp.raise_for_status()
-            metafields = mf_resp.json().get("metafields", [])
-            # Debug: print all metafields
-            for mf in metafields:
-                print(f"Product {pid} | {mf['namespace']} | {mf['key']} | {mf['type']} | {mf['value']}")
+            for product in products:
+                pid = product["id"]
+                mf_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products/{pid}/metafields.json"
+                mf_resp = requests.get(mf_url, headers=headers)
+                mf_resp.raise_for_status()
+                metafields = mf_resp.json().get("metafields", [])
+
+                # DEBUG: Print all metafields for each product
+                print(f"\nProduct {pid} | Title: {product.get('title','N/A')}")
+                for mf in metafields:
+                    print(f"  - {mf['namespace']} | {mf['key']} | {mf['type']} | {mf['value']}")
+
                 for mf in metafields:
                     if mf["namespace"] == METAFIELD_NAMESPACE and mf["key"] == METAFIELD_KEY:
                         value = mf.get("value", "").strip()
@@ -82,11 +85,12 @@ class BunningsChecker:
                             continue
                         # If value is JSON string with "url", parse it
                         try:
-                            j = json.loads(value)
-                            if isinstance(j, dict) and "url" in j:
-                                value = j["url"]
+                            parsed = json.loads(value)
+                            if isinstance(parsed, dict) and "url" in parsed:
+                                value = parsed["url"]
                         except:
                             pass
+                        value = value.strip()
                         if "bunnings.com.au" in value:
                             urls.append(value)
 
@@ -98,8 +102,8 @@ class BunningsChecker:
             else:
                 endpoint = None
 
-        urls = list(set(urls))
-        print(f"✅ Found {len(urls)} Bunnings URLs\n")
+        urls = list(set(urls))  # Remove duplicates
+        print(f"\n✅ Found {len(urls)} Bunnings URLs\n")
         return urls
 
     def check_bunnings_url(self, url):
@@ -118,8 +122,8 @@ class BunningsChecker:
             self.driver.get(url)
             time.sleep(8)
             title = self.driver.title
-            result["page_title"] = title
             page = self.driver.page_source.lower()
+            result["page_title"] = title
 
             if "bunnings" not in page:
                 result["status"] = "not_bunnings"
@@ -127,7 +131,6 @@ class BunningsChecker:
 
             add_found = False
             texts = ["add to cart", "add to trolley"]
-
             for t in texts:
                 elems = self.driver.find_elements(
                     By.XPATH,
