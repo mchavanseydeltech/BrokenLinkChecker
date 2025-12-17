@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Bunnings URL Checker – SHOPIFY METAFIELD VERSION
-Fetches Bunnings URLs from Shopify product metafields
+Bunnings URL Checker – Shopify Product Metafield Mode
+Fetches all Bunnings URLs from product metafields
 Then checks each URL for Add to Cart button
 """
 
@@ -17,7 +17,7 @@ import undetected_chromedriver as uc
 # =========================
 # 🔐 SHOPIFY CONFIG
 # =========================
-SHOPIFY_STORE = "seydeltest"  # without .myshopify.com
+SHOPIFY_STORE = "seydeltest"  # e.g., 'seydeltech'
 SHOPIFY_TOKEN = "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"
 SHOPIFY_API_VERSION = "2025-10"
 
@@ -26,7 +26,7 @@ METAFIELD_KEY = "bunnings_au_link"
 # =========================
 
 
-class BunningsDirectChecker:
+class BunningsChecker:
     def __init__(self, headless=False):
         self.headless = headless
         self.driver = None
@@ -34,32 +34,27 @@ class BunningsDirectChecker:
 
     def setup_driver(self):
         options = uc.ChromeOptions()
-
         if self.headless:
             options.add_argument("--headless=new")
-
         options.add_argument("--no-sandbox")
         options.add_argument("--disable-dev-shm-usage")
         options.add_argument("--window-size=1920,1080")
-
         options.add_experimental_option("prefs", {
             "profile.default_content_setting_values.geolocation": 2,
             "profile.default_content_setting_values.notifications": 2,
         })
-
         options.add_argument(
             "user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
             "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
         )
-
         self.driver = uc.Chrome(options=options, use_subprocess=True)
         print("✅ Browser ready")
 
     # =====================================================
-    # 🔗 FETCH BUNNINGS URLS FROM SHOPIFY METAFIELDS
+    # 🔗 FETCH ALL PRODUCTS + PRODUCT METAFIELDS
     # =====================================================
-    def fetch_bunnings_urls_from_shopify(self):
-        print("\n🔗 Fetching URLs from Shopify metafields...")
+    def fetch_bunnings_urls(self):
+        print("\n🔗 Fetching URLs from Shopify product metafields (ALL PRODUCTS)...")
 
         headers = {
             "X-Shopify-Access-Token": SHOPIFY_TOKEN,
@@ -68,37 +63,37 @@ class BunningsDirectChecker:
 
         urls = []
         endpoint = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products.json"
-        params = {"limit": 250, "status": "any"}
+        params = {"limit": 250, "status": "any"}  # max 250 per page
 
         while endpoint:
             r = requests.get(endpoint, headers=headers, params=params)
             r.raise_for_status()
-
             products = r.json().get("products", [])
 
-            for product in products:
-                pid = product["id"]
-                mf_url = (
-                    f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/"
-                    f"{SHOPIFY_API_VERSION}/products/{pid}/metafields.json"
-                )
+            if not products:
+                print("⚠️ No products returned from Shopify!")
+                break
 
+            for product in products:
+                print(f"📦 Product ID: {product['id']} | Title: {product['title']}")
+                pid = product["id"]
+
+                # Fetch product metafields
+                mf_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products/{pid}/metafields.json"
                 mf_resp = requests.get(mf_url, headers=headers)
                 mf_resp.raise_for_status()
 
                 metafields = mf_resp.json().get("metafields", [])
-
                 for mf in metafields:
                     if (
                         mf["namespace"] == METAFIELD_NAMESPACE
                         and mf["key"] == METAFIELD_KEY
                         and mf.get("value")
+                        and "bunnings.com.au" in mf["value"]
                     ):
-                        url = mf["value"].strip()
-                        if "bunnings.com.au" in url:
-                            urls.append(url)
+                        urls.append(mf["value"].strip())
 
-            # Pagination
+            # Pagination: check for 'rel="next"'
             link = r.headers.get("Link")
             if link and 'rel="next"' in link:
                 endpoint = link.split(";")[0].strip("<> ")
@@ -107,7 +102,7 @@ class BunningsDirectChecker:
                 endpoint = None
 
         urls = list(set(urls))
-        print(f"✅ Found {len(urls)} Bunnings URLs")
+        print(f"\n✅ Found {len(urls)} Bunnings URLs\n")
         return urls
 
     # =====================================================
@@ -132,9 +127,6 @@ class BunningsDirectChecker:
 
             title = self.driver.title
             result["page_title"] = title
-
-            if "Just a moment" in title:
-                time.sleep(10)
 
             page = self.driver.page_source.lower()
 
@@ -178,10 +170,10 @@ class BunningsDirectChecker:
         return result
 
     # =====================================================
-    # 📦 BULK TEST FROM SHOPIFY
+    # 📦 BULK TEST ALL URLS
     # =====================================================
-    def bulk_test_from_shopify(self):
-        urls = self.fetch_bunnings_urls_from_shopify()
+    def bulk_test(self):
+        urls = self.fetch_bunnings_urls()
         if not urls:
             print("❌ No URLs found")
             return
@@ -197,6 +189,9 @@ class BunningsDirectChecker:
         self.save_results_csv(results, filename)
         self.print_summary(results)
 
+    # =====================================================
+    # 💾 SAVE CSV
+    # =====================================================
     def save_results_csv(self, results, filename):
         with open(filename, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
@@ -222,41 +217,53 @@ class BunningsDirectChecker:
                     "Error": r["error"] or "",
                     "Test_Time": r["timestamp"],
                 })
-
         print(f"\n📊 CSV saved: {filename}")
 
+    # =====================================================
+    # 📋 PRINT SUMMARY
+    # =====================================================
     def print_summary(self, results):
         working = sum(1 for r in results if r["is_working"])
-        print("\n📋 SUMMARY")
-        print(f"Total: {len(results)}")
-        print(f"Working: {working}")
-        print(f"Broken: {len(results) - working}")
+        broken = len(results) - working
+        print("\n" + "="*40)
+        print("📋 SUMMARY")
+        print("="*40)
+        print(f"Total URLs Tested: {len(results)}")
+        print(f"✅ Working: {working}")
+        print(f"❌ Broken: {broken}")
 
+        status_counts = {}
+        for r in results:
+            status_counts[r["status"]] = status_counts.get(r["status"], 0) + 1
+
+        print("\n📈 Breakdown by status:")
+        for status, count in status_counts.items():
+            print(f"  {status}: {count}")
+
+    # =====================================================
+    # ❌ CLOSE BROWSER
+    # =====================================================
     def close(self):
         if self.driver:
-            self.driver.quit()
-            print("✅ Browser closed")
+            try:
+                self.driver.quit()
+                print("✅ Browser closed")
+            except:
+                pass
 
 
 # =====================================================
-# 🚀 MAIN
+# 🔹 MAIN
 # =====================================================
-def main():
-    print("\n🏪 BUNNINGS CHECKER – SHOPIFY METAFIELD MODE")
-    checker = None
-
-    try:
-        checker = BunningsDirectChecker(headless=False)
-        checker.bulk_test_from_shopify()
-
-    except KeyboardInterrupt:
-        print("\nStopped by user")
-    except Exception as e:
-        print(f"Error: {e}")
-    finally:
-        if checker:
-            checker.close()
-
-
 if __name__ == "__main__":
-    main()
+    print("\n🏪 BUNNINGS CHECKER – SHOPIFY METAFIELD MODE")
+    checker = BunningsChecker(headless=False)  # Set True for headless
+    try:
+        checker.bulk_test()
+    except KeyboardInterrupt:
+        print("\n⚠️ Stopped by user")
+    except Exception as e:
+        print(f"\n❌ Error: {e}")
+    finally:
+        checker.close()
+        print("\n✨ Done!")
