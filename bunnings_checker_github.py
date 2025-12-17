@@ -13,18 +13,14 @@ from datetime import datetime
 from selenium.webdriver.common.by import By
 import undetected_chromedriver as uc
 
-
 # =========================
 # 🔐 SHOPIFY CONFIG
 # =========================
-SHOPIFY_STORE = "seydeltest"  # e.g., 'seydeltech'
+SHOPIFY_STORE = "seydeltest"  # e.g., 'seydeltech'
 SHOPIFY_TOKEN = "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"
 SHOPIFY_API_VERSION = "2025-10"
-
 METAFIELD_NAMESPACE = "custom"
 METAFIELD_KEY = "bunnings_au_link"
-# =========================
-
 
 class BunningsChecker:
     def __init__(self, headless=False):
