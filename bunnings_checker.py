@@ -72,23 +72,20 @@ class BunningsChecker:
                 mf_resp.raise_for_status()
 
                 metafields = mf_resp.json().get("metafields", [])
-                for mf in metafields:
-    if mf["namespace"] == METAFIELD_NAMESPACE and mf["key"] == METAFIELD_KEY:
-        value = mf.get("value", "").strip()
-        if not value:
-            continue
-        # If value is JSON string with "url", parse it
-        try:
-            import json
-            j = json.loads(value)
-            if isinstance(j, dict) and "url" in j:
-                value = j["url"]
-        except:
-            pass
-        if "bunnings.com.au" in value:
-            urls.append(value)
-
-
+            for mf in metafields:
+                if mf["namespace"] == METAFIELD_NAMESPACE and mf["key"] == METAFIELD_KEY:
+                    value = mf.get("value", "").strip()
+                    if not value:
+                        continue
+                    # If value is JSON string with "url", parse it
+                    try:
+                        j = json.loads(value)
+                        if isinstance(j, dict) and "url" in j:
+                            value = j["url"]
+                    except:
+                        pass
+                if "bunnings.com.au" in value:
+                urls.append(value)
             link = r.headers.get("Link")
             if link and 'rel="next"' in link:
                 endpoint = link.split(";")[0].strip("<> ")
