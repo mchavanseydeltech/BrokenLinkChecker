@@ -30,7 +30,7 @@ jobs:
           python3 "$SCRIPT_FILE"
 
       - name: Upload CSV results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: bunnings-results
           path: shopify_bunnings_results_*.csv
