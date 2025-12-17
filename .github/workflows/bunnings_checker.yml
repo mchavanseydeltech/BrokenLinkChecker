@@ -23,9 +23,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install selenium undetected-chromedriver requests
 
-      - name: Run Bunnings Checker
+      - name: Run Bunnings Checker Script
         run: |
-          python3 may17123.py
+          SCRIPT_FILE="bunnings_checker.py"
+          echo "Running script: $SCRIPT_FILE"
+          python3 "$SCRIPT_FILE"
 
       - name: Upload CSV results
         uses: actions/upload-artifact@v3
