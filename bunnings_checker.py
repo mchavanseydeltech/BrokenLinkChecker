@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
-Bunnings URL Checker – Shopify Metafield Debugger
-Finds your actual metafield structure before testing
+Bunnings URL Checker – Automatic Broken Link Finder
+Finds your actual metafield structure and checks for broken links
 """
 
 import time
@@ -19,174 +19,61 @@ import undetected_chromedriver as uc
 # =========================
 SHOPIFY_STORE = "seydeltest"
 SHOPIFY_TOKEN = "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"
-SHOPIFY_API_VERSION = "2024-10"  # Changed to stable version
+SHOPIFY_API_VERSION = "2024-10"
 # =========================
 
-class BunningsDebugger:
+class AutoBunningsChecker:
     def __init__(self, headless=True):
         self.headless = headless
         self.driver = None
         self.session = requests.Session()
+        self.bunnings_urls_found = []
+        self.metafield_patterns = {}
         
-    def debug_metafield_structure(self, sample_size=5):
+    def setup_driver(self):
+        """Setup browser for Selenium tests"""
+        options = uc.ChromeOptions()
+        if self.headless:
+            options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--window-size=1920,1080")
+        
+        user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        options.add_argument(f'user-agent={user_agent}')
+        
+        self.driver = uc.Chrome(options=options, use_subprocess=True)
+    
+    def check_http_status(self, url):
         """
-        Debug function to find ALL metafields and see their structure
+        Fast HTTP check for broken links
+        Returns: (is_accessible: bool, status_code: int, error_message: str)
         """
-        print("🔍 DEBUGGING METAFIELD STRUCTURE")
-        print("="*60)
-        
-        headers = {
-            "X-Shopify-Access-Token": SHOPIFY_TOKEN,
-            "Content-Type": "application/json"
-        }
-        
-        # Fetch products
-        endpoint = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products.json"
-        params = {"limit": sample_size, "fields": "id,title,vendor,product_type"}
-        
-        all_bunnings_urls = []
-        metafield_patterns = {}
-        
         try:
-            r = requests.get(endpoint, headers=headers, params=params)
-            if r.status_code != 200:
-                print(f"❌ API Error: {r.status_code} - {r.text[:100]}")
-                return None
-                
-            products = r.json().get("products", [])
+            try:
+                response = self.session.head(url, timeout=15, allow_redirects=True, verify=True)
+            except (ConnectionError, SSLError):
+                response = self.session.get(url, timeout=15, allow_redirects=True, verify=True, stream=True)
             
-            print(f"📦 Found {len(products)} products to examine")
-            print("="*60)
+            status_code = response.status_code
             
-            for i, product in enumerate(products, 1):
-                pid = product["id"]
-                title = product.get("title", "N/A")
-                vendor = product.get("vendor", "")
-                product_type = product.get("product_type", "")
+            if 200 <= status_code < 400:
+                return True, status_code, None
+            elif status_code == 404:
+                return False, status_code, "Page not found (404)"
+            elif status_code == 403:
+                return False, status_code, "Access forbidden (403)"
+            elif 500 <= status_code < 600:
+                return False, status_code, f"Server error ({status_code})"
+            else:
+                return False, status_code, f"HTTP error ({status_code})"
                 
-                print(f"\n[{i}] 📦 Product: {title}")
-                print(f"    ID: {pid} | Vendor: {vendor} | Type: {product_type}")
-                print("    " + "-"*40)
-                
-                # Get ALL metafields for this product
-                mf_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products/{pid}/metafields.json"
-                mf_resp = requests.get(mf_url, headers=headers)
-                
-                if mf_resp.status_code == 200:
-                    metafields = mf_resp.json().get("metafields", [])
-                    
-                    if metafields:
-                        print(f"    Found {len(metafields)} metafields:")
-                        
-                        for mf in metafields:
-                            namespace = mf.get("namespace", "")
-                            key = mf.get("key", "")
-                            value = str(mf.get("value", ""))
-                            mf_type = mf.get("type", "")
-                            mf_id = mf.get("id", "")
-                            
-                            # Store pattern for statistics
-                            pattern = f"{namespace}.{key}"
-                            metafield_patterns[pattern] = metafield_patterns.get(pattern, 0) + 1
-                            
-                            # Check for Bunnings URLs in any value
-                            if "bunnings.com.au" in value.lower():
-                                print(f"    ✅ FOUND BUNNINGS URL!")
-                                print(f"        {namespace}.{key} ({mf_type})")
-                                
-                                # Try to extract clean URL
-                                url = self.extract_clean_url(value)
-                                print(f"        URL: {url[:80]}...")
-                                
-                                all_bunnings_urls.append({
-                                    "product_id": pid,
-                                    "product_title": title,
-                                    "namespace": namespace,
-                                    "key": key,
-                                    "original_value": value[:100],
-                                    "clean_url": url
-                                })
-                            else:
-                                # Show first 50 chars of non-Bunnings values
-                                display_value = value.replace('\n', ' ').replace('\r', ' ')
-                                if len(display_value) > 50:
-                                    display_value = display_value[:50] + "..."
-                                print(f"    {namespace}.{key} = {display_value}")
-                    else:
-                        print("    No metafields found for this product")
-                else:
-                    print(f"    ❌ Error fetching metafields: {mf_resp.status_code}")
-                
-                # Small delay to avoid rate limiting
-                if i < len(products):
-                    time.sleep(0.3)
-                    
+        except Timeout:
+            return False, None, "Request timeout (15s)"
+        except RequestException as e:
+            return False, None, f"Request error: {str(e)[:100]}"
         except Exception as e:
-            print(f"❌ Debug error: {e}")
-            import traceback
-            traceback.print_exc()
-            return None
-        
-        # Print summary
-        print("\n" + "="*60)
-        print("📊 DEBUG SUMMARY")
-        print("="*60)
-        
-        print(f"\n📦 Products examined: {len(products)}")
-        print(f"🔗 Bunnings URLs found: {len(all_bunnings_urls)}")
-        
-        if metafield_patterns:
-            print(f"\n🔍 Metafield patterns found:")
-            for pattern, count in sorted(metafield_patterns.items(), key=lambda x: x[1], reverse=True):
-                print(f"  {pattern}: {count} products")
-        
-        if all_bunnings_urls:
-            print(f"\n✅ BUNNINGS URLS FOUND:")
-            for url_info in all_bunnings_urls:
-                print(f"\n  Product: {url_info['product_title'][:40]}...")
-                print(f"    Metafield: {url_info['namespace']}.{url_info['key']}")
-                print(f"    Clean URL: {url_info['clean_url'][:80]}...")
-                print(f"    Original: {url_info['original_value']}...")
-            
-            # Save findings to file
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            debug_file = f"bunnings_debug_findings_{timestamp}.json"
-            with open(debug_file, 'w') as f:
-                json.dump({
-                    "store": SHOPIFY_STORE,
-                    "products_examined": len(products),
-                    "bunnings_urls_found": len(all_bunnings_urls),
-                    "metafield_patterns": metafield_patterns,
-                    "bunnings_urls": all_bunnings_urls
-                }, f, indent=2)
-            print(f"\n💾 Debug data saved to: {debug_file}")
-            
-            # Generate recommended METAFIELD_CONFIGS
-            print(f"\n💡 RECOMMENDED METAFIELD_CONFIGS:")
-            print("Copy this into your main script:")
-            print("\nMETAFIELD_CONFIGS = [")
-            unique_patterns = set()
-            for url_info in all_bunnings_urls:
-                pattern = {"namespace": url_info["namespace"], "key": url_info["key"]}
-                if str(pattern) not in unique_patterns:
-                    print(f'    {pattern},')
-                    unique_patterns.add(str(pattern))
-            print("]")
-            
-        else:
-            print(f"\n❌ NO BUNNINGS URLS FOUND IN {len(products)} PRODUCTS")
-            print("\nPossible issues:")
-            print("1. Wrong Shopify store name or token")
-            print("2. No products have Bunnings URLs yet")
-            print("3. URLs stored differently (not in metafields)")
-            print("4. Need to check more products")
-            
-            # Offer to check more products
-            check_more = input(f"\nCheck more products? (Enter number or 'n'): ").strip()
-            if check_more.lower() != 'n' and check_more.isdigit():
-                return self.debug_metafield_structure(sample_size=int(check_more))
-        
-        return all_bunnings_urls
+            return False, None, f"Unexpected error: {str(e)[:100]}"
     
     def extract_clean_url(self, value):
         """Extract clean URL from various formats"""
@@ -199,7 +86,6 @@ class BunningsDebugger:
         try:
             data = json.loads(value)
             if isinstance(data, dict):
-                # Look for URL in common keys
                 for key in ['url', 'link', 'href', 'bunnings_url', 'source', 'reference']:
                     if key in data and data[key]:
                         url = str(data[key]).strip()
@@ -215,12 +101,13 @@ class BunningsDebugger:
             if "bunnings.com.au" in match.lower():
                 return match
         
-        # Return original if no clean URL found
-        return value[:100] + ("..." if len(value) > 100 else "")
+        return value
     
-    def test_api_connection(self):
-        """Test if Shopify API connection works"""
-        print("\n🔧 TESTING SHOPIFY API CONNECTION")
+    def discover_metafields(self, max_products=50):
+        """
+        Automatically discover how Bunnings URLs are stored
+        """
+        print("\n🔍 DISCOVERING METAFIELD STRUCTURE")
         print("="*60)
         
         headers = {
@@ -228,152 +115,391 @@ class BunningsDebugger:
             "Content-Type": "application/json"
         }
         
-        # Test 1: Get product count
+        endpoint = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products.json"
+        params = {"limit": 50, "fields": "id,title"}
+        
+        try:
+            r = requests.get(endpoint, headers=headers, params=params)
+            if r.status_code != 200:
+                print(f"❌ API Error: {r.status_code}")
+                return False
+            
+            products = r.json().get("products", [])
+            print(f"📦 Examining {len(products)} products for Bunnings URLs...")
+            
+            for i, product in enumerate(products, 1):
+                pid = product["id"]
+                title = product.get("title", "N/A")
+                
+                # Get metafields for this product
+                mf_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products/{pid}/metafields.json"
+                mf_resp = requests.get(mf_url, headers=headers)
+                
+                if mf_resp.status_code == 200:
+                    metafields = mf_resp.json().get("metafields", [])
+                    
+                    for mf in metafields:
+                        namespace = mf.get("namespace", "")
+                        key = mf.get("key", "")
+                        value = str(mf.get("value", ""))
+                        
+                        # Track this metafield pattern
+                        pattern = f"{namespace}.{key}"
+                        self.metafield_patterns[pattern] = self.metafield_patterns.get(pattern, 0) + 1
+                        
+                        # Check for Bunnings URLs
+                        if "bunnings.com.au" in value.lower():
+                            clean_url = self.extract_clean_url(value)
+                            if clean_url and "bunnings.com.au" in clean_url.lower():
+                                self.bunnings_urls_found.append({
+                                    "product_id": pid,
+                                    "product_title": title,
+                                    "namespace": namespace,
+                                    "key": key,
+                                    "url": clean_url,
+                                    "original_value": value[:100] + "..." if len(value) > 100 else value
+                                })
+                
+                # Progress indicator
+                if i % 10 == 0:
+                    print(f"   Processed {i}/{len(products)} products...")
+                
+                time.sleep(0.1)
+            
+            print(f"\n✅ Discovery complete!")
+            print(f"   Products examined: {len(products)}")
+            print(f"   Bunnings URLs found: {len(self.bunnings_urls_found)}")
+            
+            if self.metafield_patterns:
+                print(f"\n📊 Metafield patterns discovered:")
+                for pattern, count in sorted(self.metafield_patterns.items(), key=lambda x: x[1], reverse=True):
+                    print(f"   {pattern}: {count} occurrences")
+            
+            return len(self.bunnings_urls_found) > 0
+            
+        except Exception as e:
+            print(f"❌ Discovery error: {e}")
+            return False
+    
+    def check_single_url(self, url_info):
+        """
+        Check if a Bunnings URL is broken
+        """
+        url = url_info["url"]
+        
+        result = {
+            "product_id": url_info["product_id"],
+            "product_title": url_info["product_title"],
+            "url": url,
+            "page_title": "",
+            "status": "not_tested",
+            "http_status": None,
+            "http_error": None,
+            "is_working": False,
+            "add_to_cart_found": False,
+            "error": None,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # STEP 1: Fast HTTP check
+        http_accessible, http_status, http_error = self.check_http_status(url)
+        result["http_status"] = http_status
+        result["http_error"] = http_error
+        
+        if not http_accessible:
+            if http_status == 404:
+                result["status"] = "BROKEN_404"
+            elif http_status == 403:
+                result["status"] = "BROKEN_403"
+            elif http_status and 500 <= http_status < 600:
+                result["status"] = f"BROKEN_SERVER_{http_status}"
+            else:
+                result["status"] = "BROKEN_HTTP_ERROR"
+            return result
+        
+        # STEP 2: Browser verification (only if HTTP check passed)
+        try:
+            if not self.driver:
+                self.setup_driver()
+            
+            self.driver.get(url)
+            time.sleep(5)
+            
+            title = self.driver.title
+            result["page_title"] = title
+            page_source = self.driver.page_source.lower()
+            
+            # Check if it's actually a Bunnings page
+            if "bunnings" not in page_source and "bunnings.com.au" not in title.lower():
+                result["status"] = "NOT_BUNNINGS_PAGE"
+                return result
+            
+            # Look for Add to Cart button
+            cart_found = False
+            texts = ["add to cart", "add to trolley"]
+            
+            for t in texts:
+                try:
+                    elements = self.driver.find_elements(
+                        By.XPATH,
+                        f"//*[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'{t}')]"
+                    )
+                    for element in elements:
+                        try:
+                            if element.is_displayed():
+                                cart_found = True
+                                break
+                        except:
+                            continue
+                    if cart_found:
+                        break
+                except:
+                    continue
+            
+            result["add_to_cart_found"] = cart_found
+            
+            if cart_found:
+                result["status"] = "WORKING"
+                result["is_working"] = True
+            else:
+                # Check for specific issues
+                if "out of stock" in page_source:
+                    result["status"] = "OUT_OF_STOCK"
+                elif "no longer available" in page_source:
+                    result["status"] = "DISCONTINUED"
+                elif "404" in page_source or "not found" in page_source:
+                    result["status"] = "BROKEN_JS_404"
+                elif "sold out" in page_source:
+                    result["status"] = "SOLD_OUT"
+                else:
+                    result["status"] = "NO_ADD_TO_CART"
+        
+        except Exception as e:
+            result["status"] = "BROWSER_ERROR"
+            result["error"] = str(e)[:100]
+        
+        return result
+    
+    def find_broken_links(self):
+        """
+        Main function: Find all Bunnings URLs and check which are broken
+        """
+        print("\n" + "="*60)
+        print("🔗 AUTOMATIC BROKEN LINK FINDER")
+        print("="*60)
+        
+        # Test API connection first
+        if not self.test_api_connection():
+            print("❌ Cannot connect to Shopify. Please check credentials.")
+            return
+        
+        # Step 1: Discover metafield structure
+        print("\n🔍 Step 1: Discovering metafield structure...")
+        if not self.discover_metafields():
+            print("❌ No Bunnings URLs found in products.")
+            return
+        
+        # Step 2: Check all discovered URLs
+        print(f"\n🔗 Step 2: Checking {len(self.bunnings_urls_found)} Bunnings URLs...")
+        print("="*60)
+        
+        results = []
+        broken_links = []
+        working_links = []
+        
+        for i, url_info in enumerate(self.bunnings_urls_found, 1):
+            product_title = url_info["product_title"]
+            url = url_info["url"]
+            
+            print(f"[{i}/{len(self.bunnings_urls_found)}] Testing: {product_title[:40]}...")
+            
+            result = self.check_single_url(url_info)
+            results.append(result)
+            
+            # Classify result
+            if "BROKEN" in result["status"]:
+                broken_links.append(result)
+                print(f"   ❌ {result['status']}")
+            elif result["is_working"]:
+                working_links.append(result)
+                print(f"   ✅ WORKING")
+            else:
+                print(f"   ⚠️ {result['status']}")
+            
+            # Small delay between requests
+            if i < len(self.bunnings_urls_found):
+                time.sleep(2)
+        
+        # Step 3: Save and display results
+        print("\n" + "="*60)
+        print("📊 RESULTS SUMMARY")
+        print("="*60)
+        
+        total = len(results)
+        broken = len(broken_links)
+        working = len(working_links)
+        other = total - broken - working
+        
+        print(f"Total URLs checked: {total}")
+        print(f"✅ Working links: {working}")
+        print(f"❌ Broken links: {broken}")
+        print(f"⚠️  Other issues: {other}")
+        
+        # Save detailed results
+        self.save_results(results)
+        
+        # Show broken links
+        if broken_links:
+            print(f"\n🔍 BROKEN LINKS FOUND ({broken}):")
+            print("="*60)
+            for link in broken_links[:10]:  # Show first 10
+                print(f"\n📦 Product: {link['product_title'][:50]}...")
+                print(f"   URL: {link['url'][:70]}...")
+                print(f"   Status: {link['status']}")
+                if link['http_error']:
+                    print(f"   Error: {link['http_error']}")
+            
+            if broken > 10:
+                print(f"\n   ... and {broken - 10} more broken links")
+        
+        # Save broken links separately
+        if broken_links:
+            self.save_broken_links_csv(broken_links)
+        
+        return results
+    
+    def test_api_connection(self):
+        """Test Shopify API connection"""
+        headers = {
+            "X-Shopify-Access-Token": SHOPIFY_TOKEN,
+            "Content-Type": "application/json"
+        }
+        
         count_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products/count.json"
+        
         try:
             r = requests.get(count_url, headers=headers, timeout=10)
             if r.status_code == 200:
                 count = r.json().get("count", 0)
-                print(f"✅ API Connection Successful!")
-                print(f"   Store: {SHOPIFY_STORE}")
-                print(f"   Total Products: {count}")
+                print(f"✅ Connected to: {SHOPIFY_STORE}")
+                print(f"   Total products: {count}")
                 return True
             else:
                 print(f"❌ API Error: {r.status_code}")
-                print(f"   Response: {r.text[:100]}")
                 return False
         except Exception as e:
-            print(f"❌ Connection Failed: {e}")
+            print(f"❌ Connection failed: {e}")
             return False
     
-    def quick_bunnings_test(self, test_url):
-        """Quick test of a Bunnings URL"""
-        if not self.driver:
-            self.setup_driver()
+    def save_results(self, results):
+        """Save all results to CSV"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"bunnings_broken_links_{timestamp}.csv"
         
-        print(f"\n🚀 QUICK TEST: {test_url[:60]}...")
+        with open(filename, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=[
+                "Product_ID",
+                "Product_Title",
+                "Bunnings_URL",
+                "Page_Title",
+                "HTTP_Status",
+                "Status",
+                "Working",
+                "Add_to_Cart_Found",
+                "Error",
+                "Test_Time"
+            ])
+            writer.writeheader()
+            
+            for r in results:
+                writer.writerow({
+                    "Product_ID": r["product_id"],
+                    "Product_Title": r["product_title"][:100],
+                    "Bunnings_URL": r["url"],
+                    "Page_Title": r["page_title"][:150] if r["page_title"] else "",
+                    "HTTP_Status": r["http_status"] or "",
+                    "Status": r["status"],
+                    "Working": "Yes" if r["is_working"] else "No",
+                    "Add_to_Cart_Found": "Yes" if r["add_to_cart_found"] else "No",
+                    "Error": r["error"] or "",
+                    "Test_Time": r["timestamp"]
+                })
         
-        try:
-            self.driver.get(test_url)
-            time.sleep(5)
-            
-            title = self.driver.title
-            print(f"   Title: {title}")
-            
-            page_source = self.driver.page_source.lower()
-            
-            if "bunnings" in page_source:
-                print("   ✅ Bunnings page detected")
-                
-                # Look for Add to Cart
-                cart_found = False
-                texts = ["add to cart", "add to trolley"]
-                for t in texts:
-                    try:
-                        elements = self.driver.find_elements(
-                            By.XPATH,
-                            f"//*[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'{t}')]"
-                        )
-                        for element in elements:
-                            if element.is_displayed():
-                                cart_found = True
-                                print(f"   ✅ Found: '{t}'")
-                                break
-                        if cart_found:
-                            break
-                    except:
-                        continue
-                
-                if cart_found:
-                    print("   ✅ PRODUCT IS WORKING")
-                else:
-                    print("   ❌ No Add to Cart found (might be out of stock)")
-            else:
-                print("   ❌ Not a Bunnings page")
-                
-        except Exception as e:
-            print(f"   ❌ Test error: {e}")
+        print(f"\n💾 All results saved to: {filename}")
     
-    def setup_driver(self):
-        """Setup browser for quick tests"""
-        options = uc.ChromeOptions()
-        if self.headless:
-            options.add_argument("--headless=new")
-        options.add_argument("--no-sandbox")
-        options.add_argument("--disable-dev-shm-usage")
-        options.add_argument("--window-size=1920,1080")
+    def save_broken_links_csv(self, broken_links):
+        """Save only broken links to a separate CSV"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"bunnings_broken_only_{timestamp}.csv"
         
-        user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-        options.add_argument(f'user-agent={user_agent}')
+        with open(filename, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=[
+                "Product_ID",
+                "Product_Title",
+                "Broken_URL",
+                "HTTP_Status",
+                "Status",
+                "HTTP_Error",
+                "Test_Time"
+            ])
+            writer.writeheader()
+            
+            for r in broken_links:
+                writer.writerow({
+                    "Product_ID": r["product_id"],
+                    "Product_Title": r["product_title"][:100],
+                    "Broken_URL": r["url"],
+                    "HTTP_Status": r["http_status"] or "",
+                    "Status": r["status"],
+                    "HTTP_Error": r["http_error"] or "",
+                    "Test_Time": r["timestamp"]
+                })
         
-        self.driver = uc.Chrome(options=options, use_subprocess=True)
-        print("✅ Browser ready for testing")
+        print(f"💾 Broken links saved to: {filename}")
     
     def close(self):
         """Cleanup"""
         if self.driver:
             try:
                 self.driver.quit()
-                print("✅ Browser closed")
             except:
                 pass
 
 
-def main_menu():
-    """Main menu for debugging"""
+# ===== MAIN EXECUTION =====
+if __name__ == "__main__":
     print("\n" + "="*60)
-    print("🏪 BUNNINGS METAFIELD DEBUGGER")
+    print("🔗 AUTOMATIC BUNNINGS BROKEN LINK FINDER")
     print("="*60)
-    print("This tool helps you find how Bunnings URLs are stored")
+    print("This script will:")
+    print("1. Auto-discover your metafield structure")
+    print("2. Find all Bunnings URLs")
+    print("3. Check which links are broken")
     print("="*60)
     
-    debugger = BunningsDebugger(headless=True)
+    checker = AutoBunningsChecker(headless=True)
     
     try:
-        # First test API connection
-        if not debugger.test_api_connection():
-            print("\n❌ Cannot connect to Shopify. Check:")
-            print(f"   1. Store name: {SHOPIFY_STORE}")
-            print(f"   2. API token: {SHOPIFY_TOKEN[:20]}...")
-            print(f"   3. API version: {SHOPIFY_API_VERSION}")
-            return
+        print("\n🚀 Starting automatic broken link check...")
+        results = checker.find_broken_links()
         
-        print("\nOptions:")
-        print("  1. Debug metafield structure (find Bunnings URLs)")
-        print("  2. Test a specific Bunnings URL")
-        print("  3. Check more products")
-        print("="*60)
-        
-        choice = input("\nEnter choice (1-3): ").strip() or "1"
-        
-        if choice == "1":
-            sample = input("How many products to check? (default: 5): ").strip()
-            sample_size = int(sample) if sample.isdigit() else 5
-            debugger.debug_metafield_structure(sample_size=sample_size)
-            
-        elif choice == "2":
-            test_url = input("Enter Bunnings URL to test: ").strip()
-            if test_url:
-                debugger.quick_bunnings_test(test_url)
+        if results:
+            # Final summary
+            broken_count = sum(1 for r in results if "BROKEN" in r["status"])
+            if broken_count > 0:
+                print(f"\n⚠️  ACTION REQUIRED: Found {broken_count} broken Bunnings links!")
+                print("   Check the CSV files for details.")
             else:
-                print("❌ No URL provided")
-                
-        elif choice == "3":
-            sample = input("How many products to check? (default: 20): ").strip()
-            sample_size = int(sample) if sample.isdigit() else 20
-            debugger.debug_metafield_structure(sample_size=sample_size)
+                print(f"\n✅ SUCCESS: No broken links found!")
+        else:
+            print("\n❌ No results to report.")
             
     except KeyboardInterrupt:
-        print("\n⚠️ Stopped by user")
+        print("\n⚠️  Stopped by user")
     except Exception as e:
         print(f"\n❌ Error: {e}")
         import traceback
         traceback.print_exc()
     finally:
-        debugger.close()
-        print("\n✨ Debug complete!")
-
-
-# ===== MAIN =====
-if __name__ == "__main__":
-    main_menu()
+        checker.close()
+        print("\n✨ Script completed!")
