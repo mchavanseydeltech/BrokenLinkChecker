@@ -1,33 +1,77 @@
-name: Bunnings Checker
+name: Bunnings Availability Checker
 
-on: [workflow_dispatch]
+on:
+  schedule:
+    # Run daily at 6 AM UTC (4 PM Sydney time)
+    - cron: '0 6 * * *'
+  workflow_dispatch:  # Allow manual triggers
+  push:
+    branches: [ main, master ]
 
 jobs:
-  check:
+  check-bunnings:
     runs-on: ubuntu-latest
     
     steps:
-    - uses: actions/checkout@v4
+    - name: Checkout repository
+      uses: actions/checkout@v4
     
     - name: Set up Python
       uses: actions/setup-python@v4
       with:
         python-version: '3.11'
     
-    - name: Install Chrome
+    - name: Install Chrome and Chromedriver
       run: |
         sudo apt-get update
         sudo apt-get install -y chromium-browser chromium-chromedriver
+        
+        # Verify installations
+        echo "Chrome version:"
+        chromium-browser --version
+        echo "Chromedriver version:"
+        chromedriver --version
     
-    - name: Install Python packages
+    - name: Install Python dependencies
       run: |
-        pip install ShopifyAPI selenium undetected-chromedriver
+        python -m pip install --upgrade pip
+        
+        # Install from requirements.txt if it exists
+        if [ -f "requirements.txt" ]; then
+          pip install -r requirements.txt
+        else
+          # Install packages directly
+          pip install shopifyapi selenium undetected-chromedriver
+        fi
+        
+        # Verify the critical package
+        echo "Verifying shopifyapi installation:"
+        python -c "import shopify; print(f'✅ Shopify imported from: {shopify.__file__}')"
     
-    - name: Fix import in script
+    - name: Run Bunnings Checker
+      timeout-minutes: 15
       run: |
-        # Replace import shopify with correct import
-        sed -i "s/^import shopify$/import shopifyapi as shopify/" bunnings_checker.py
-    
-    - name: Run checker
-      run: |
+        echo "🚀 Starting Bunnings Availability Checker..."
+        echo "==========================================="
+        
+        # Run in automated mode
         python bunnings_checker.py --quick
+        
+        echo "==========================================="
+        echo "✅ Checker completed!"
+    
+    - name: Upload results as artifacts
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: bunnings-check-results
+        path: |
+          bunnings_check_*.csv
+          bunnings_check_*.json
+        retention-days: 7
+    
+    - name: Show file summary
+      if: always()
+      run: |
+        echo "📁 Generated files:"
+        ls -la *.csv *.json 2>/dev/null || echo "No result files found"
