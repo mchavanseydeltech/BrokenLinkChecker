@@ -22,7 +22,7 @@ SHOPIFY_TOKEN = "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"
 SHOPIFY_API_VERSION = "2025-10"
 
 METAFIELD_NAMESPACE = "custom"
-METAFIELD_KEY = "bunnings_url"
+METAFIELD_KEY = "bunnings_au_link"
 # =========================
 
 class BunningsChecker:
