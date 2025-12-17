@@ -15,12 +15,12 @@ import undetected_chromedriver as uc
 # =========================
 # 🔐 SHOPIFY CONFIG (HARDCODED)
 # =========================
-SHOPIFY_STORE = "seydeltest"  # e.g., "seydeltech"
-SHOPIFY_TOKEN = "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"
+SHOPIFY_STORE = "cassien24"  # e.g., "seydeltech"
+SHOPIFY_TOKEN = "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"
 SHOPIFY_API_VERSION = "2025-10"
 
 METAFIELD_NAMESPACE = "custom"
-METAFIELD_KEY = "bunnings_au_link"
+METAFIELD_KEY = "au_link"
 # =========================
 
 class BunningsChecker:
