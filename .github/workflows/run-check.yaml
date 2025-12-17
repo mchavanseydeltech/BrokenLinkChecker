@@ -1,9 +1,9 @@
-name: Test Bunnings Checker
+name: Bunnings Checker
 
 on: [workflow_dispatch]
 
 jobs:
-  test:
+  check:
     runs-on: ubuntu-latest
     
     steps:
@@ -14,13 +14,20 @@ jobs:
       with:
         python-version: '3.11'
     
-    - name: Install dependencies
+    - name: Install Chrome
       run: |
         sudo apt-get update
-        sudo apt-get install -y python3-pip chromium-browser chromium-chromedriver
-        pip3 install shopify selenium
-        
-    - name: Test Python script
+        sudo apt-get install -y chromium-browser chromium-chromedriver
+    
+    - name: Install Python packages
       run: |
-        echo "Testing if script runs..."
-        python3 bunnings_checker.py --help || echo "Script help showed"
+        pip install ShopifyAPI selenium undetected-chromedriver
+    
+    - name: Fix import in script
+      run: |
+        # Replace import shopify with correct import
+        sed -i "s/^import shopify$/import shopifyapi as shopify/" bunnings_checker.py
+    
+    - name: Run checker
+      run: |
+        python bunnings_checker.py --quick
