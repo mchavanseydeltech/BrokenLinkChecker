@@ -8,12 +8,11 @@ import time
 import csv
 import json
 import sys
+import os
 from datetime import datetime
 from typing import List, Dict, Optional
-
 # Shopify API
 import shopify
-
 # Selenium for browser automation
 from selenium import webdriver
 from selenium.webdriver.common.by import By
@@ -29,14 +28,14 @@ import undetected_chromedriver as uc
 SHOPIFY_CONFIG = {
     'shop_url': 'seydeltest.myshopify.com',           # Your Shopify store URL
     'access_token': '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', # Shopify API token
-    'api_version': '2025-10',                              # Shopify API version
+    'api_version': '2025-10',                         # Shopify API version
 }
 
 BUNNINGS_CONFIG = {
-    'headless_mode': False,        # Set True to run browser in background
-    'timeout_seconds': 30,         # Max wait for page elements
-    'delay_between_tests': 3,      # Seconds between URL tests
-    'max_products': 50,            # Maximum products to check
+    'headless_mode': True,        # Set True for GitHub Actions, False for local
+    'timeout_seconds': 30,        # Max wait for page elements
+    'delay_between_tests': 3,     # Seconds between URL tests
+    'max_products': 50,           # Maximum products to check
 }
 
 # ============================================================================
@@ -68,7 +67,7 @@ class ShopifyBunningsChecker:
             sys.exit(1)
     
     def setup_browser(self):
-        """Setup undetected Chrome browser"""
+        """Setup undetected Chrome browser for GitHub Actions"""
         try:
             options = uc.ChromeOptions()
             
@@ -76,15 +75,16 @@ class ShopifyBunningsChecker:
                 options.add_argument('--headless=new')
                 options.add_argument('--no-sandbox')
                 options.add_argument('--disable-dev-shm-usage')
+                options.add_argument('--disable-gpu')
+                options.add_argument('--remote-debugging-port=9222')
             
             # Browser settings to appear more human
             options.add_argument('--disable-blink-features=AutomationControlled')
             options.add_argument('--disable-infobars')
-            options.add_argument('--start-maximized')
             options.add_argument('--window-size=1920,1080')
             
             # User agent
-            user_agent = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+            user_agent = "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
             options.add_argument(f'user-agent={user_agent}')
             
             # Disable notifications and location
@@ -93,8 +93,26 @@ class ShopifyBunningsChecker:
                 "profile.default_content_setting_values.geolocation": 2,
             })
             
+            # For GitHub Actions, try to find Chrome
+            chrome_paths = [
+                '/usr/bin/google-chrome-stable',
+                '/usr/bin/chromium-browser',
+                '/usr/bin/chromium',
+                '/usr/bin/google-chrome'
+            ]
+            
+            for path in chrome_paths:
+                if os.path.exists(path):
+                    options.binary_location = path
+                    print(f"✅ Found Chrome at: {path}")
+                    break
+            
             # Create driver
-            self.driver = uc.Chrome(options=options, use_subprocess=True)
+            self.driver = uc.Chrome(
+                options=options,
+                version_main=120,
+                use_subprocess=True
+            )
             
             # Set page load timeout
             self.driver.set_page_load_timeout(BUNNINGS_CONFIG['timeout_seconds'])
@@ -103,8 +121,49 @@ class ShopifyBunningsChecker:
             
         except Exception as e:
             print(f"❌ Browser setup failed: {e}")
-            print("Make sure you have Chrome installed and run: pip install undetected-chromedriver")
-            sys.exit(1)
+            
+            # Try fallback with regular selenium
+            try:
+                print("Attempting fallback with regular selenium...")
+                from selenium.webdriver.chrome.service import Service
+                from selenium.webdriver.chrome.options import Options
+                
+                chrome_options = Options()
+                chrome_options.add_argument('--headless')
+                chrome_options.add_argument('--no-sandbox')
+                chrome_options.add_argument('--disable-dev-shm-usage')
+                chrome_options.add_argument('--disable-gpu')
+                chrome_options.add_argument('--window-size=1920,1080')
+                
+                # Try to find chromedriver
+                chromedriver_paths = [
+                    '/usr/local/bin/chromedriver',
+                    '/usr/bin/chromedriver',
+                    '/usr/lib/chromium-browser/chromedriver'
+                ]
+                
+                service = None
+                for path in chromedriver_paths:
+                    if os.path.exists(path):
+                        service = Service(path)
+                        print(f"✅ Found chromedriver at: {path}")
+                        break
+                
+                if service:
+                    self.driver = webdriver.Chrome(service=service, options=chrome_options)
+                    print("✅ Browser initialized with fallback method")
+                else:
+                    # Last resort: let selenium manage driver
+                    self.driver = webdriver.Chrome(options=chrome_options)
+                    print("✅ Browser initialized with auto-managed driver")
+                    
+            except Exception as e2:
+                print(f"❌ All browser setup methods failed: {e2}")
+                print("\nTroubleshooting tips for GitHub Actions:")
+                print("1. Check Chrome is installed: sudo apt-get install -y chromium-browser")
+                print("2. Check chromedriver is installed: sudo apt-get install -y chromium-chromedriver")
+                print("3. Try: pip install --upgrade undetected-chromedriver")
+                sys.exit(1)
     
     def fetch_products_with_bunnings_urls(self, limit: int = 50) -> List[Dict]:
         """
@@ -238,7 +297,6 @@ class ShopifyBunningsChecker:
                     "[aria-label*='add to trolley']",
                     "button.btn-primary",
                     "button.btn--primary",
-                    "button:contains('Add')",
                 ]
                 
                 for selector in selectors:
