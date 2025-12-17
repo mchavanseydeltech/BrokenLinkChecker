@@ -27,8 +27,8 @@ import undetected_chromedriver as uc
 # ============================================================================
 
 SHOPIFY_CONFIG = {
-    'shop_url': 'cassien24.myshopify.com',           # Your Shopify store URL
-    'access_token': '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', # Shopify API token
+    'shop_url': 'seydeltest.myshopify.com',           # Your Shopify store URL
+    'access_token': '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', # Shopify API token
     'api_version': '2025-10',                              # Shopify API version
 }
 
