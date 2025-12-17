@@ -10,6 +10,7 @@ import time
 import csv
 import requests
 import json
+import re
 from datetime import datetime
 from selenium.webdriver.common.by import By
 import undetected_chromedriver as uc
@@ -21,8 +22,14 @@ SHOPIFY_STORE = "seydeltest"
 SHOPIFY_TOKEN = "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"
 SHOPIFY_API_VERSION = "2025-10"
 
-METAFIELD_NAMESPACE = "custom"
-METAFIELD_KEY = "bunnings_au_link"
+# Try different possible namespace/key combinations
+METAFIELD_CONFIGS = [
+    {"namespace": "custom", "key": "bunnings_au_link"},
+    {"namespace": "global", "key": "bunnings_url"},
+    {"namespace": "bunnings", "key": "url"},
+    {"namespace": "references", "key": "bunnings"},
+    # Add more possible configurations here
+]
 # =========================
 
 class BunningsChecker:
@@ -49,6 +56,116 @@ class BunningsChecker:
         self.driver = uc.Chrome(options=options, use_subprocess=True)
         print("✅ Browser ready")
 
+    def extract_url_from_value(self, value):
+        """Extract URL from various possible formats"""
+        if not value:
+            return None
+        
+        # Clean the value
+        value = str(value).strip()
+        
+        # Try to parse as JSON
+        try:
+            data = json.loads(value)
+            if isinstance(data, dict):
+                # Look for URL in common keys
+                for key in ['url', 'link', 'href', 'bunnings_url', 'source']:
+                    if key in data and data[key]:
+                        url = str(data[key]).strip()
+                        if self.is_bunnings_url(url):
+                            return url
+                # Check all string values in the JSON
+                for val in data.values():
+                    if isinstance(val, str) and self.is_bunnings_url(val):
+                        return val.strip()
+        except:
+            pass
+        
+        # Check if it's already a URL
+        if self.is_bunnings_url(value):
+            return value
+        
+        # Try to extract URL from text
+        url_pattern = r'https?://[^\s<>"\']+'
+        matches = re.findall(url_pattern, value)
+        for match in matches:
+            if self.is_bunnings_url(match):
+                return match
+        
+        return None
+
+    def is_bunnings_url(self, text):
+        """Check if text contains Bunnings URL"""
+        return "bunnings.com.au" in str(text).lower()
+
+    def fetch_all_metafields_debug(self):
+        """Debug function to see ALL metafields"""
+        print("\n🔍 DEBUG: Fetching ALL metafields from ALL products...")
+        headers = {
+            "X-Shopify-Access-Token": SHOPIFY_TOKEN,
+            "Content-Type": "application/json"
+        }
+        
+        endpoint = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products.json"
+        params = {"limit": 10, "fields": "id,title"}  # Start with 10 products for debugging
+        
+        try:
+            r = requests.get(endpoint, headers=headers, params=params)
+            r.raise_for_status()
+            products = r.json().get("products", [])
+            
+            print(f"\n📦 Found {len(products)} products")
+            
+            all_metafields = []
+            for product in products:
+                pid = product["id"]
+                title = product.get("title", "N/A")
+                print(f"\n{'='*60}")
+                print(f"Product ID: {pid}")
+                print(f"Title: {title}")
+                print(f"{'='*60}")
+                
+                # Get metafields for this product
+                mf_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products/{pid}/metafields.json"
+                mf_resp = requests.get(mf_url, headers=headers)
+                
+                if mf_resp.status_code == 200:
+                    metafields = mf_resp.json().get("metafields", [])
+                    print(f"Found {len(metafields)} metafields:")
+                    
+                    for mf in metafields:
+                        namespace = mf.get("namespace", "")
+                        key = mf.get("key", "")
+                        value = mf.get("value", "")[:100]  # First 100 chars
+                        mf_type = mf.get("type", "")
+                        
+                        print(f"  - {namespace}.{key} ({mf_type}): {value}")
+                        
+                        # Check if this looks like a Bunnings URL
+                        if self.is_bunnings_url(value):
+                            print(f"    ⭐ CONTAINS BUNNINGS URL!")
+                            extracted = self.extract_url_from_value(value)
+                            if extracted:
+                                print(f"    ✨ Extracted URL: {extracted}")
+                                all_metafields.append({
+                                    "product_id": pid,
+                                    "product_title": title,
+                                    "namespace": namespace,
+                                    "key": key,
+                                    "value": value,
+                                    "extracted_url": extracted
+                                })
+                else:
+                    print(f"  ❌ Failed to fetch metafields: {mf_resp.status_code}")
+                
+                time.sleep(0.5)  # Avoid rate limiting
+            
+            return all_metafields
+            
+        except Exception as e:
+            print(f"❌ Error in debug mode: {e}")
+            return []
+
     def fetch_bunnings_urls(self):
         print("\n🔗 Fetching URLs from Shopify product metafields...")
         headers = {
@@ -58,6 +175,7 @@ class BunningsChecker:
         urls = []
         endpoint = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products.json"
         params = {"limit": 250, "status": "any"}
+        product_count = 0
 
         while endpoint:
             r = requests.get(endpoint, headers=headers, params=params)
@@ -66,33 +184,29 @@ class BunningsChecker:
             if not products:
                 break
 
+            product_count += len(products)
+            print(f"📦 Processing {len(products)} products (total: {product_count})...")
+
             for product in products:
                 pid = product["id"]
                 mf_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products/{pid}/metafields.json"
                 mf_resp = requests.get(mf_url, headers=headers)
-                mf_resp.raise_for_status()
+                
+                if mf_resp.status_code != 200:
+                    continue
+                    
                 metafields = mf_resp.json().get("metafields", [])
 
-                # DEBUG: Print all metafields for each product
-                print(f"\nProduct {pid} | Title: {product.get('title','N/A')}")
                 for mf in metafields:
-                    print(f"  - {mf['namespace']} | {mf['key']} | {mf['type']} | {mf['value']}")
-
-                for mf in metafields:
-                    if mf["namespace"] == METAFIELD_NAMESPACE and mf["key"] == METAFIELD_KEY:
-                        value = mf.get("value", "").strip()
-                        if not value:
-                            continue
-                        # If value is JSON string with "url", parse it
-                        try:
-                            parsed = json.loads(value)
-                            if isinstance(parsed, dict) and "url" in parsed:
-                                value = parsed["url"]
-                        except:
-                            pass
-                        value = value.strip()
-                        if "bunnings.com.au" in value:
-                            urls.append(value)
+                    value = mf.get("value", "")
+                    if not value:
+                        continue
+                    
+                    # Try to extract URL from value
+                    extracted_url = self.extract_url_from_value(value)
+                    if extracted_url:
+                        urls.append(extracted_url)
+                        print(f"  ✅ Found URL in {mf.get('namespace')}.{mf.get('key')}: {extracted_url[:80]}...")
 
             # Pagination
             link = r.headers.get("Link")
@@ -101,9 +215,11 @@ class BunningsChecker:
                 params = None
             else:
                 endpoint = None
+                
+            time.sleep(0.5)  # Avoid rate limiting
 
         urls = list(set(urls))  # Remove duplicates
-        print(f"\n✅ Found {len(urls)} Bunnings URLs\n")
+        print(f"\n✅ Found {len(urls)} unique Bunnings URLs\n")
         return urls
 
     def check_bunnings_url(self, url):
@@ -163,9 +279,26 @@ class BunningsChecker:
         return result
 
     def bulk_test(self):
+        # First, run debug to see what metafields exist
+        debug_data = self.fetch_all_metafields_debug()
+        
+        if debug_data:
+            print(f"\n📊 DEBUG SUMMARY: Found {len(debug_data)} metafields containing Bunnings URLs")
+            for item in debug_data:
+                print(f"  - Product: {item['product_title']} ({item['product_id']})")
+                print(f"    Metafield: {item['namespace']}.{item['key']}")
+                print(f"    URL: {item['extracted_url'][:100]}...")
+        
+        # Now fetch all URLs properly
         urls = self.fetch_bunnings_urls()
+        
         if not urls:
-            print("❌ No URLs found")
+            print("\n❌ No URLs found. Possible issues:")
+            print("   1. Metafields might have different namespace/key")
+            print("   2. URLs might be stored in a different format")
+            print("   3. No products have Bunnings URLs yet")
+            print("\n💡 Check the debug output above to see your actual metafield structure.")
+            print("   Then update the METAFIELD_CONFIGS list in the script.")
             return
 
         results = []
@@ -234,6 +367,8 @@ class BunningsChecker:
 # ===== MAIN =====
 if __name__ == "__main__":
     print("\n🏪 BUNNINGS CHECKER – SHOPIFY METAFIELD MODE")
+    print("🔍 Running in DEBUG mode first to detect metafield structure...")
+    
     checker = BunningsChecker(headless=True)  # headless for GitHub Actions
     try:
         checker.bulk_test()
@@ -241,6 +376,8 @@ if __name__ == "__main__":
         print("\n⚠️ Stopped by user")
     except Exception as e:
         print(f"\n❌ Error: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
         checker.close()
         print("\n✨ Done!")
