@@ -1,169 +1,262 @@
 #!/usr/bin/env python3
 """
-Bunnings URL Checker - GitHub Actions Version
+Bunnings URL Checker – SHOPIFY METAFIELD VERSION
+Fetches Bunnings URLs from Shopify product metafields
+Then checks each URL for Add to Cart button
 """
 
 import time
 import os
-import sys
 import csv
+import requests
 from datetime import datetime
-from selenium import webdriver
 from selenium.webdriver.common.by import By
 import undetected_chromedriver as uc
 
-print("🚀 Bunnings URL Checker - Starting...")
-print(f"Python version: {sys.version}")
-print(f"Working directory: {os.getcwd()}")
 
-# List files for debugging
-print("\n📁 Files in current directory:")
-for f in os.listdir('.'):
-    print(f"  {f}")
+# =========================
+# 🔐 SHOPIFY CONFIG
+# =========================
+SHOPIFY_STORE = "seydeltest.myshopify.com"  # without .myshopify.com
+SHOPIFY_TOKEN = "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"
+SHOPIFY_API_VERSION = "2025-10"
 
-def setup_browser():
-    """Setup browser for headless mode"""
-    print("\n🛠️ Setting up browser...")
-    
-    options = uc.ChromeOptions()
-    
-    # Headless mode for GitHub Actions
-    options.add_argument('--headless')
-    options.add_argument('--no-sandbox')
-    options.add_argument('--disable-dev-shm-usage')
-    options.add_argument('--disable-gpu')
-    options.add_argument('--window-size=1920,1080')
-    
-    # Additional settings
-    options.add_argument('--disable-blink-features=AutomationControlled')
-    options.add_experimental_option("excludeSwitches", ["enable-automation"])
-    options.add_experimental_option('useAutomationExtension', False)
-    
-    try:
-        print("Initializing Chrome driver...")
-        driver = uc.Chrome(options=options, version_main=120)
-        print(f"✅ Browser ready - Chrome {driver.capabilities['browserVersion']}")
-        return driver
-    except Exception as e:
-        print(f"❌ Failed to setup browser: {e}")
-        raise
+METAFIELD_NAMESPACE = "custom"
+METAFIELD_KEY = "bunnings_au_link"
+# =========================
 
-def check_url(driver, url):
-    """Check a single URL"""
-    print(f"\n🔗 Checking: {url[:60]}...")
-    
-    try:
-        driver.get(url)
-        time.sleep(8)  # Wait for page load
-        
-        title = driver.title
-        print(f"   Title: {title[:50]}...")
-        
-        # Check for Cloudflare
-        if "Just a moment" in title or "Checking" in title:
-            print("   ⚠️ Cloudflare detected, waiting...")
-            time.sleep(15)
-            title = driver.title
+
+class BunningsDirectChecker:
+    def __init__(self, headless=False):
+        self.headless = headless
+        self.driver = None
+        self.setup_driver()
+
+    def setup_driver(self):
+        options = uc.ChromeOptions()
+
+        if self.headless:
+            options.add_argument("--headless=new")
+
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--window-size=1920,1080")
+
+        options.add_experimental_option("prefs", {
+            "profile.default_content_setting_values.geolocation": 2,
+            "profile.default_content_setting_values.notifications": 2,
+        })
+
+        options.add_argument(
+            "user-agent=Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120 Safari/537.36"
+        )
+
+        self.driver = uc.Chrome(options=options, use_subprocess=True)
+        print("✅ Browser ready")
+
+    # =====================================================
+    # 🔗 FETCH BUNNINGS URLS FROM SHOPIFY METAFIELDS
+    # =====================================================
+    def fetch_bunnings_urls_from_shopify(self):
+        print("\n🔗 Fetching URLs from Shopify metafields...")
+
+        headers = {
+            "X-Shopify-Access-Token": SHOPIFY_TOKEN,
+            "Content-Type": "application/json"
+        }
+
+        urls = []
+        endpoint = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products.json"
+        params = {"limit": 250, "status": "any"}
+
+        while endpoint:
+            r = requests.get(endpoint, headers=headers, params=params)
+            r.raise_for_status()
+
+            products = r.json().get("products", [])
+
+            for product in products:
+                pid = product["id"]
+                mf_url = (
+                    f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/"
+                    f"{SHOPIFY_API_VERSION}/products/{pid}/metafields.json"
+                )
+
+                mf_resp = requests.get(mf_url, headers=headers)
+                mf_resp.raise_for_status()
+
+                metafields = mf_resp.json().get("metafields", [])
+
+                for mf in metafields:
+                    if (
+                        mf["namespace"] == METAFIELD_NAMESPACE
+                        and mf["key"] == METAFIELD_KEY
+                        and mf.get("value")
+                    ):
+                        url = mf["value"].strip()
+                        if "bunnings.com.au" in url:
+                            urls.append(url)
+
+            # Pagination
+            link = r.headers.get("Link")
+            if link and 'rel="next"' in link:
+                endpoint = link.split(";")[0].strip("<> ")
+                params = None
+            else:
+                endpoint = None
+
+        urls = list(set(urls))
+        print(f"✅ Found {len(urls)} Bunnings URLs")
+        return urls
+
+    # =====================================================
+    # 🔍 CHECK SINGLE BUNNINGS URL
+    # =====================================================
+    def check_bunnings_url(self, url):
+        print(f"\n🔗 Testing: {url[:80]}")
+
+        result = {
+            "url": url,
+            "page_title": "",
+            "status": "",
+            "is_working": False,
+            "add_to_cart_found": False,
+            "error": None,
+            "timestamp": datetime.now().isoformat()
+        }
+
+        try:
+            self.driver.get(url)
+            time.sleep(8)
+
+            title = self.driver.title
+            result["page_title"] = title
+
             if "Just a moment" in title:
-                return "CLOUDFLARE_BLOCKED", False
-        
-        # Check page content
-        page_text = driver.page_source.lower()
-        
-        # Look for Add to Cart button
-        if 'add to cart' in page_text or 'add to trolley' in page_text:
-            print("   ✅ ADD TO CART FOUND")
-            return "WORKING", True
-        elif 'out of stock' in page_text:
-            print("   ⚠️ OUT OF STOCK")
-            return "OUT_OF_STOCK", False
-        elif 'product not found' in page_text or '404' in page_text:
-            print("   ❌ PRODUCT NOT FOUND")
-            return "NOT_FOUND", False
-        else:
-            print("   ❌ NO ADD TO CART")
-            return "NO_ADD_TO_CART", False
-            
-    except Exception as e:
-        print(f"   ❌ ERROR: {str(e)[:50]}")
-        return f"ERROR: {str(e)[:30]}", False
+                time.sleep(10)
 
-def main():
-    """Main function"""
-    driver = None
-    
-    try:
-        # Setup browser
-        driver = setup_browser()
-        
-        # Read URLs
-        urls_file = "bunnings_urls.txt"
-        if not os.path.exists(urls_file):
-            print(f"\n❌ ERROR: {urls_file} not found!")
-            print("Creating sample file...")
-            with open(urls_file, 'w') as f:
-                f.write("# Sample Bunnings URLs\n")
-                f.write("https://www.bunnings.com.au/orion-grid-connect-smart-rechargeable-2k-security-camera-4-pack_p0503618\n")
-                f.write("https://www.bunnings.com.au/search/products?q=security+camera\n")
-        
-        print(f"\n📖 Reading URLs from: {urls_file}")
-        with open(urls_file, 'r') as f:
-            urls = [line.strip() for line in f if line.strip() and not line.startswith('#')]
-        
+            page = self.driver.page_source.lower()
+
+            if "bunnings" not in page:
+                result["status"] = "not_bunnings"
+                return result
+
+            add_found = False
+            texts = ["add to cart", "add to trolley"]
+
+            for t in texts:
+                elems = self.driver.find_elements(
+                    By.XPATH,
+                    f"//*[contains(translate(text(),'ABCDEFGHIJKLMNOPQRSTUVWXYZ','abcdefghijklmnopqrstuvwxyz'),'{t}')]"
+                )
+                for e in elems:
+                    if e.is_displayed():
+                        add_found = True
+                        break
+                if add_found:
+                    break
+
+            result["add_to_cart_found"] = add_found
+
+            if add_found:
+                result["status"] = "working"
+                result["is_working"] = True
+            elif "out of stock" in page:
+                result["status"] = "out_of_stock"
+            elif "no longer available" in page:
+                result["status"] = "discontinued"
+            elif "404" in page:
+                result["status"] = "not_found"
+            else:
+                result["status"] = "no_add_to_cart"
+
+        except Exception as e:
+            result["status"] = "error"
+            result["error"] = str(e)
+
+        return result
+
+    # =====================================================
+    # 📦 BULK TEST FROM SHOPIFY
+    # =====================================================
+    def bulk_test_from_shopify(self):
+        urls = self.fetch_bunnings_urls_from_shopify()
         if not urls:
-            print("❌ No URLs found in file")
+            print("❌ No URLs found")
             return
-        
-        print(f"✅ Found {len(urls)} URL(s) to check")
-        
-        # Check each URL
+
         results = []
         for i, url in enumerate(urls, 1):
-            print(f"\n[{i}/{len(urls)}] ", end="")
-            status, working = check_url(driver, url)
-            results.append({
-                'url': url,
-                'status': status,
-                'working': working,
-                'timestamp': datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            })
-            
-            # Delay between requests
-            if i < len(urls):
-                time.sleep(3)
-        
-        # Save results
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        csv_file = f"results_{timestamp}.csv"
-        
-        with open(csv_file, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.writer(f)
-            writer.writerow(['URL', 'Status', 'Working', 'Timestamp'])
+            print(f"[{i}/{len(urls)}]", end=" ")
+            results.append(self.check_bunnings_url(url))
+            time.sleep(2)
+
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"shopify_bunnings_results_{ts}.csv"
+        self.save_results_csv(results, filename)
+        self.print_summary(results)
+
+    def save_results_csv(self, results, filename):
+        with open(filename, "w", newline="", encoding="utf-8") as f:
+            writer = csv.DictWriter(
+                f,
+                fieldnames=[
+                    "Bunnings_URL",
+                    "Page_Title",
+                    "Status",
+                    "Working",
+                    "Add_to_Cart_Found",
+                    "Error",
+                    "Test_Time",
+                ],
+            )
+            writer.writeheader()
             for r in results:
-                writer.writerow([r['url'], r['status'], r['working'], r['timestamp']])
-        
-        # Print summary
-        working_count = sum(1 for r in results if r['working'])
-        print("\n" + "="*50)
-        print("📊 SUMMARY")
-        print("="*50)
-        print(f"Total URLs checked: {len(results)}")
-        print(f"✅ Working: {working_count}")
-        print(f"❌ Not working: {len(results) - working_count}")
-        print(f"📁 Results saved to: {csv_file}")
-        print("="*50)
-        
+                writer.writerow({
+                    "Bunnings_URL": r["url"],
+                    "Page_Title": r["page_title"][:200],
+                    "Status": r["status"],
+                    "Working": "Yes" if r["is_working"] else "No",
+                    "Add_to_Cart_Found": "Yes" if r["add_to_cart_found"] else "No",
+                    "Error": r["error"] or "",
+                    "Test_Time": r["timestamp"],
+                })
+
+        print(f"\n📊 CSV saved: {filename}")
+
+    def print_summary(self, results):
+        working = sum(1 for r in results if r["is_working"])
+        print("\n📋 SUMMARY")
+        print(f"Total: {len(results)}")
+        print(f"Working: {working}")
+        print(f"Broken: {len(results) - working}")
+
+    def close(self):
+        if self.driver:
+            self.driver.quit()
+            print("✅ Browser closed")
+
+
+# =====================================================
+# 🚀 MAIN
+# =====================================================
+def main():
+    print("\n🏪 BUNNINGS CHECKER – SHOPIFY METAFIELD MODE")
+    checker = None
+
+    try:
+        checker = BunningsDirectChecker(headless=False)
+        checker.bulk_test_from_shopify()
+
     except KeyboardInterrupt:
-        print("\n\n⚠️ Stopped by user")
+        print("\nStopped by user")
     except Exception as e:
-        print(f"\n❌ Fatal error: {e}")
-        import traceback
-        traceback.print_exc()
-        sys.exit(1)
+        print(f"Error: {e}")
     finally:
-        if driver:
-            driver.quit()
-            print("\n✅ Browser closed")
+        if checker:
+            checker.close()
+
 
 if __name__ == "__main__":
     main()
