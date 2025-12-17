@@ -17,7 +17,7 @@ import undetected_chromedriver as uc
 # =========================
 # 🔐 SHOPIFY CONFIG
 # =========================
-SHOPIFY_STORE = "seydeltest.myshopify.com"  # without .myshopify.com
+SHOPIFY_STORE = "seydeltest"  # without .myshopify.com
 SHOPIFY_TOKEN = "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"
 SHOPIFY_API_VERSION = "2025-10"
 
