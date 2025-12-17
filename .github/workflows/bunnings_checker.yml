@@ -1,130 +1,119 @@
 name: Bunnings URL Checker
-
 on:
-  # Run on push to main branch
   push:
-    branches: [ "main" ]
-  
-  # Allow manual triggering
+    branches: [ main, master ]
   workflow_dispatch:
     inputs:
       urls_file:
-        description: 'URLs file path'
+        description: 'URLs file to use'
         default: 'bunnings_urls.txt'
         required: false
-      run_mode:
-        description: 'Run mode'
-        type: choice
-        options: ['full', 'quick']
-        default: 'full'
-
-  # Schedule daily at 8 AM UTC
-  schedule:
-    - cron: '0 8 * * *'
+      headless:
+        description: 'Run in headless mode'
+        type: boolean
+        default: true
 
 jobs:
-  check-urls:
+  check-bunnings-urls:
     runs-on: ubuntu-latest
-    timeout-minutes: 30  # Prevent infinite runs
+    timeout-minutes: 30
     
     steps:
-    # 1. Checkout code
-    - name: Checkout repository
+    # 1. Checkout repository
+    - name: Checkout code
       uses: actions/checkout@v4
     
     # 2. Setup Python
-    - name: Set up Python
-      uses: actions/setup-python@v5
+    - name: Setup Python
+      uses: actions/setup-python@v4
       with:
         python-version: '3.10'
     
-    # 3. Install system dependencies
-    - name: Install system packages
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y \
-          wget \
-          unzip \
-          libnss3 \
-          libatk-bridge2.0-0 \
-          libdrm2 \
-          libxkbcommon0 \
-          libgbm1 \
-          libasound2
-        
-        echo "✅ System packages installed"
-    
-    # 4. Install Chrome
+    # 3. Install Chrome browser
     - name: Install Google Chrome
       run: |
-        # Install Chrome from official repo
+        sudo apt-get update
+        sudo apt-get install -y wget gnupg
         wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
-        echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+        sudo sh -c 'echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" >> /etc/apt/sources.list.d/google-chrome.list'
         sudo apt-get update
         sudo apt-get install -y google-chrome-stable
-        
-        # Verify installation
-        google-chrome --version
-        echo "✅ Chrome installed"
+        echo "Chrome version installed: $(google-chrome --version)"
     
-    # 5. Install ChromeDriver
+    # 4. Install ChromeDriver (MUST match Chrome version)
     - name: Install ChromeDriver
       run: |
-        # Get Chrome version
+        # Get installed Chrome version
         CHROME_VERSION=$(google-chrome --version | grep -oP '\d+\.\d+\.\d+\.\d+')
         echo "Chrome version: $CHROME_VERSION"
         
+        # Extract major version
+        CHROME_MAJOR_VERSION=$(echo $CHROME_VERSION | cut -d'.' -f1)
+        echo "Major version: $CHROME_MAJOR_VERSION"
+        
         # Download matching ChromeDriver
-        CHROMEDRIVER_VERSION=$(echo $CHROME_VERSION | cut -d'.' -f1)
-        echo "Using ChromeDriver version: $CHROMEDRIVER_VERSION"
+        wget -q "https://chromedriver.storage.googleapis.com/LATEST_RELEASE_$CHROME_MAJOR_VERSION" -O chromedriver_version.txt
+        CHROMEDRIVER_VERSION=$(cat chromedriver_version.txt)
+        echo "ChromeDriver version: $CHROMEDRIVER_VERSION"
         
-        # Download from official source
-        wget -q "https://storage.googleapis.com/chrome-for-testing-public/$CHROMEDRIVER_VERSION.0.0/linux64/chromedriver-linux64.zip" -O chromedriver.zip
-        
-        # Extract and install
-        unzip -o chromedriver.zip
-        sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+        # Download and install
+        wget -q "https://chromedriver.storage.googleapis.com/$CHROMEDRIVER_VERSION/chromedriver_linux64.zip"
+        unzip -o chromedriver_linux64.zip
+        sudo mv chromedriver /usr/local/bin/
         sudo chmod +x /usr/local/bin/chromedriver
         
-        # Verify
-        chromedriver --version
-        echo "✅ ChromeDriver installed"
+        # Verify installation
+        echo "ChromeDriver installed: $(chromedriver --version)"
     
-    # 6. Install Python dependencies
+    # 5. Install Python dependencies
     - name: Install Python dependencies
       run: |
         python -m pip install --upgrade pip
         pip install -r requirements.txt
         
-        # Also install additional useful packages
-        pip install requests beautifulsoup4 lxml
+        # Additional packages for debugging
+        pip install requests
         
-        echo "✅ Python dependencies installed"
+        # List installed packages
+        pip list | grep -E "(selenium|undetected-chromedriver|requests)"
     
-    # 7. Create URLs file if it doesn't exist
+    # 6. Create bunnings_urls.txt if it doesn't exist
     - name: Setup URLs file
       run: |
-        # Use input file or default
-        URLS_FILE="${{ inputs.urls_file || 'bunnings_urls.txt' }}"
-        
-        if [ ! -f "$URLS_FILE" ]; then
-          echo "📝 Creating sample URLs file..."
-          python -c "
-sample_urls = '''https://www.bunnings.com.au/orion-grid-connect-smart-rechargeable-2k-security-camera-4-pack_p0503618
+        if [ ! -f "bunnings_urls.txt" ]; then
+          echo "📝 Creating sample bunnings_urls.txt file..."
+          cat > bunnings_urls.txt << 'EOF'
+# Sample Bunnings URLs - Add your URLs below
+https://www.bunnings.com.au/orion-grid-connect-smart-rechargeable-2k-security-camera-4-pack_p0503618
 https://www.bunnings.com.au/orion-4k-wired-outdoor-security-camera_p0252107
-https://www.bunnings.com.au/orion-grid-connect-smart-doorbell-camera_p0252108
-'''
-with open('$URLS_FILE', 'w') as f:
-    f.write(sample_urls)
-          "
-          echo "✅ Created sample file: $URLS_FILE"
+https://www.bunnings.com.au/search/products?q=security+camera
+EOF
+          echo "✅ Created sample bunnings_urls.txt"
+        fi
+        
+        echo "📄 URLs file preview:"
+        head -10 bunnings_urls.txt
+        echo ""
+        echo "Total lines: $(wc -l < bunnings_urls.txt)"
+    
+    # 7. Debug: Show directory structure
+    - name: Debug - Show files
+      run: |
+        echo "📁 Current directory structure:"
+        ls -la
+        echo ""
+        echo "📁 .github/workflows directory:"
+        ls -la .github/workflows/
+        echo ""
+        echo "📄 Python script check:"
+        if [ -f "bunnings_checker.py" ]; then
+          echo "✅ bunnings_checker.py exists"
+          head -5 bunnings_checker.py
         else
-          echo "✅ Using existing file: $URLS_FILE"
-          echo "📄 File contents preview:"
-          head -5 "$URLS_FILE"
+          echo "❌ bunnings_checker.py NOT FOUND"
         fi
     
-    # 8. Run the checker
+    # 8. Run the Bunnings checker
     - name: Run Bunnings URL Checker
       id: run-checker
       env:
@@ -132,45 +121,55 @@ with open('$URLS_FILE', 'w') as f:
         PYTHONUNBUFFERED: '1'
       run: |
         echo "🚀 Starting Bunnings URL Checker..."
-        echo "======================================"
+        echo "========================================"
         
-        # Run the script
-        python bunnings_checker_github.py
+        # Run the Python script
+        python bunnings_checker.py
         
-        echo "======================================"
+        echo "========================================"
         echo "✅ Checker completed"
         
-        # List generated files
-        echo "📁 Generated files:"
-        ls -la checker_results/ 2>/dev/null || echo "No results directory"
+        # List any result files
+        echo "📊 Generated files:"
+        ls -la *.csv 2>/dev/null || echo "No CSV files found"
+        ls -la results_* 2>/dev/null || echo "No result files found"
     
-    # 9. Upload results as artifact
+    # 9. Upload results as artifacts
     - name: Upload results as artifact
       if: always()
       uses: actions/upload-artifact@v4
       with:
         name: bunnings-results
         path: |
-          checker_results/
+          results_*.csv
           bunnings_urls.txt
         retention-days: 7
     
-    # 10. Upload summary to job summary
-    - name: Create job summary
+    # 10. Create summary
+    - name: Create summary
       if: always()
       run: |
-        echo "# Bunnings URL Checker Results" >> $GITHUB_STEP_SUMMARY
+        echo "## 📊 Bunnings URL Checker Results" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "**Workflow completed at:** $(date)" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         
-        if [ -d "checker_results" ]; then
-          # Find latest summary file
-          LATEST_SUMMARY=$(ls -t checker_results/*summary*.txt 2>/dev/null | head -1)
+        # Check for results
+        RESULT_FILES=$(ls results_*.csv 2>/dev/null || true)
+        
+        if [ -n "$RESULT_FILES" ]; then
+          LATEST_RESULT=$(ls -t results_*.csv | head -1)
+          echo "**Latest results file:** \`$LATEST_RESULT\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
           
-          if [ -f "$LATEST_SUMMARY" ]; then
-            cat "$LATEST_SUMMARY" >> $GITHUB_STEP_SUMMARY
-          else
-            echo "⚠️ No summary file found" >> $GITHUB_STEP_SUMMARY
-          fi
+          # Show summary from CSV
+          echo "**Results summary:**" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "URLs tested: $(tail -n +2 $LATEST_RESULT | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "Working: $(grep -i 'WORKING' $LATEST_RESULT | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "Not working: $(grep -i 'NOT_WORKING' $LATEST_RESULT | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo "Errors: $(grep -i 'ERROR' $LATEST_RESULT | wc -l)" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
         else
-          echo "❌ No results directory found" >> $GITHUB_STEP_SUMMARY
+          echo "❌ No results files found" >> $GITHUB_STEP_SUMMARY
         fi
