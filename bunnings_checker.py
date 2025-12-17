@@ -25,9 +25,6 @@ SHOPIFY_API_VERSION = "2025-10"
 # Try different possible namespace/key combinations
 METAFIELD_CONFIGS = [
     {"namespace": "custom", "key": "bunnings_au_link"},
-    {"namespace": "global", "key": "bunnings_url"},
-    {"namespace": "bunnings", "key": "url"},
-    {"namespace": "references", "key": "bunnings"},
     # Add more possible configurations here
 ]
 # =========================
