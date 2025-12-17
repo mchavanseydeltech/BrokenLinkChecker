@@ -1,12 +1,11 @@
 #!/usr/bin/env python3
 """
 Bunnings URL Checker – Shopify Product Metafield Mode
-Fetches all Bunnings URLs from product metafields
-Then checks each URL for Add to Cart button
+Fetches all Bunnings URLs from product metafields (all products)
+Checks each URL for Add to Cart button using Selenium (headless)
 """
 
 import time
-import os
 import csv
 import requests
 from datetime import datetime
@@ -16,14 +15,16 @@ import undetected_chromedriver as uc
 # =========================
 # 🔐 SHOPIFY CONFIG
 # =========================
-SHOPIFY_STORE = "seydeltest"  # e.g., 'seydeltech'
+SHOPIFY_STORE = "seydeltest"  # e.g., "seydeltech"
 SHOPIFY_TOKEN = "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"
 SHOPIFY_API_VERSION = "2025-10"
+
 METAFIELD_NAMESPACE = "custom"
 METAFIELD_KEY = "bunnings_au_link"
+# =========================
 
 class BunningsChecker:
-    def __init__(self, headless=False):
+    def __init__(self, headless=True):
         self.headless = headless
         self.driver = None
         self.setup_driver()
@@ -46,20 +47,15 @@ class BunningsChecker:
         self.driver = uc.Chrome(options=options, use_subprocess=True)
         print("✅ Browser ready")
 
-    # =====================================================
-    # 🔗 FETCH ALL PRODUCTS + PRODUCT METAFIELDS
-    # =====================================================
     def fetch_bunnings_urls(self):
-        print("\n🔗 Fetching URLs from Shopify product metafields (ALL PRODUCTS)...")
-
+        print("\n🔗 Fetching URLs from Shopify product metafields...")
         headers = {
             "X-Shopify-Access-Token": SHOPIFY_TOKEN,
             "Content-Type": "application/json"
         }
-
         urls = []
         endpoint = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products.json"
-        params = {"limit": 250, "status": "any"}  # max 250 per page
+        params = {"limit": 250, "status": "any"}
 
         while endpoint:
             r = requests.get(endpoint, headers=headers, params=params)
@@ -67,29 +63,22 @@ class BunningsChecker:
             products = r.json().get("products", [])
 
             if not products:
-                print("⚠️ No products returned from Shopify!")
                 break
 
             for product in products:
-                print(f"📦 Product ID: {product['id']} | Title: {product['title']}")
                 pid = product["id"]
-
-                # Fetch product metafields
                 mf_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products/{pid}/metafields.json"
                 mf_resp = requests.get(mf_url, headers=headers)
                 mf_resp.raise_for_status()
 
                 metafields = mf_resp.json().get("metafields", [])
                 for mf in metafields:
-                    if (
-                        mf["namespace"] == METAFIELD_NAMESPACE
+                    if (mf["namespace"] == METAFIELD_NAMESPACE
                         and mf["key"] == METAFIELD_KEY
                         and mf.get("value")
-                        and "bunnings.com.au" in mf["value"]
-                    ):
+                        and "bunnings.com.au" in mf["value"]):
                         urls.append(mf["value"].strip())
 
-            # Pagination: check for 'rel="next"'
             link = r.headers.get("Link")
             if link and 'rel="next"' in link:
                 endpoint = link.split(";")[0].strip("<> ")
@@ -98,15 +87,11 @@ class BunningsChecker:
                 endpoint = None
 
         urls = list(set(urls))
-        print(f"\n✅ Found {len(urls)} Bunnings URLs\n")
+        print(f"✅ Found {len(urls)} Bunnings URLs\n")
         return urls
 
-    # =====================================================
-    # 🔍 CHECK SINGLE BUNNINGS URL
-    # =====================================================
     def check_bunnings_url(self, url):
         print(f"\n🔗 Testing: {url[:80]}")
-
         result = {
             "url": url,
             "page_title": "",
@@ -120,10 +105,8 @@ class BunningsChecker:
         try:
             self.driver.get(url)
             time.sleep(8)
-
             title = self.driver.title
             result["page_title"] = title
-
             page = self.driver.page_source.lower()
 
             if "bunnings" not in page:
@@ -146,7 +129,6 @@ class BunningsChecker:
                     break
 
             result["add_to_cart_found"] = add_found
-
             if add_found:
                 result["status"] = "working"
                 result["is_working"] = True
@@ -165,9 +147,6 @@ class BunningsChecker:
 
         return result
 
-    # =====================================================
-    # 📦 BULK TEST ALL URLS
-    # =====================================================
     def bulk_test(self):
         urls = self.fetch_bunnings_urls()
         if not urls:
@@ -185,9 +164,6 @@ class BunningsChecker:
         self.save_results_csv(results, filename)
         self.print_summary(results)
 
-    # =====================================================
-    # 💾 SAVE CSV
-    # =====================================================
     def save_results_csv(self, results, filename):
         with open(filename, "w", newline="", encoding="utf-8") as f:
             writer = csv.DictWriter(
@@ -215,15 +191,10 @@ class BunningsChecker:
                 })
         print(f"\n📊 CSV saved: {filename}")
 
-    # =====================================================
-    # 📋 PRINT SUMMARY
-    # =====================================================
     def print_summary(self, results):
         working = sum(1 for r in results if r["is_working"])
         broken = len(results) - working
-        print("\n" + "="*40)
-        print("📋 SUMMARY")
-        print("="*40)
+        print("\n📋 SUMMARY")
         print(f"Total URLs Tested: {len(results)}")
         print(f"✅ Working: {working}")
         print(f"❌ Broken: {broken}")
@@ -236,9 +207,6 @@ class BunningsChecker:
         for status, count in status_counts.items():
             print(f"  {status}: {count}")
 
-    # =====================================================
-    # ❌ CLOSE BROWSER
-    # =====================================================
     def close(self):
         if self.driver:
             try:
@@ -248,12 +216,10 @@ class BunningsChecker:
                 pass
 
 
-# =====================================================
-# 🔹 MAIN
-# =====================================================
+# ===== MAIN =====
 if __name__ == "__main__":
     print("\n🏪 BUNNINGS CHECKER – SHOPIFY METAFIELD MODE")
-    checker = BunningsChecker(headless=False)  # Set True for headless
+    checker = BunningsChecker(headless=True)  # headless for GitHub Actions
     try:
         checker.bulk_test()
     except KeyboardInterrupt:
