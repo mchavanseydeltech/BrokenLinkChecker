@@ -9,6 +9,8 @@ import csv
 import requests
 import json
 import re
+import os
+import sys
 from datetime import datetime
 from requests.exceptions import RequestException, Timeout, SSLError, ConnectionError
 from selenium.webdriver.common.by import By
@@ -42,7 +44,12 @@ class AutoBunningsChecker:
         user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
         options.add_argument(f'user-agent={user_agent}')
         
-        self.driver = uc.Chrome(options=options, use_subprocess=True)
+        try:
+            self.driver = uc.Chrome(options=options, use_subprocess=True)
+            return True
+        except Exception as e:
+            print(f"❌ Failed to setup browser: {e}")
+            return False
     
     def check_http_status(self, url):
         """
@@ -116,16 +123,21 @@ class AutoBunningsChecker:
         }
         
         endpoint = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products.json"
-        params = {"limit": 50, "fields": "id,title"}
+        params = {"limit": max_products, "fields": "id,title"}
         
         try:
             r = requests.get(endpoint, headers=headers, params=params)
             if r.status_code != 200:
                 print(f"❌ API Error: {r.status_code}")
+                print(f"Response: {r.text[:200]}")
                 return False
             
             products = r.json().get("products", [])
-            print(f"📦 Examining {len(products)} products for Bunnings URLs...")
+            print(f"📦 Found {len(products)} products to examine...")
+            
+            if not products:
+                print("❌ No products found in store")
+                return False
             
             for i, product in enumerate(products, 1):
                 pid = product["id"]
@@ -138,27 +150,29 @@ class AutoBunningsChecker:
                 if mf_resp.status_code == 200:
                     metafields = mf_resp.json().get("metafields", [])
                     
-                    for mf in metafields:
-                        namespace = mf.get("namespace", "")
-                        key = mf.get("key", "")
-                        value = str(mf.get("value", ""))
-                        
-                        # Track this metafield pattern
-                        pattern = f"{namespace}.{key}"
-                        self.metafield_patterns[pattern] = self.metafield_patterns.get(pattern, 0) + 1
-                        
-                        # Check for Bunnings URLs
-                        if "bunnings.com.au" in value.lower():
-                            clean_url = self.extract_clean_url(value)
-                            if clean_url and "bunnings.com.au" in clean_url.lower():
-                                self.bunnings_urls_found.append({
-                                    "product_id": pid,
-                                    "product_title": title,
-                                    "namespace": namespace,
-                                    "key": key,
-                                    "url": clean_url,
-                                    "original_value": value[:100] + "..." if len(value) > 100 else value
-                                })
+                    if metafields:
+                        for mf in metafields:
+                            namespace = mf.get("namespace", "")
+                            key = mf.get("key", "")
+                            value = str(mf.get("value", ""))
+                            
+                            # Track this metafield pattern
+                            pattern = f"{namespace}.{key}"
+                            self.metafield_patterns[pattern] = self.metafield_patterns.get(pattern, 0) + 1
+                            
+                            # Check for Bunnings URLs
+                            if "bunnings.com.au" in value.lower():
+                                clean_url = self.extract_clean_url(value)
+                                if clean_url and "bunnings.com.au" in clean_url.lower():
+                                    self.bunnings_urls_found.append({
+                                        "product_id": pid,
+                                        "product_title": title,
+                                        "namespace": namespace,
+                                        "key": key,
+                                        "url": clean_url,
+                                        "original_value": value[:100] + "..." if len(value) > 100 else value
+                                    })
+                                    print(f"  ✅ Found Bunnings URL: {title[:30]}...")
                 
                 # Progress indicator
                 if i % 10 == 0:
@@ -179,6 +193,8 @@ class AutoBunningsChecker:
             
         except Exception as e:
             print(f"❌ Discovery error: {e}")
+            import traceback
+            traceback.print_exc()
             return False
     
     def check_single_url(self, url_info):
@@ -220,7 +236,9 @@ class AutoBunningsChecker:
         # STEP 2: Browser verification (only if HTTP check passed)
         try:
             if not self.driver:
-                self.setup_driver()
+                if not self.setup_driver():
+                    result["status"] = "BROWSER_SETUP_FAILED"
+                    return result
             
             self.driver.get(url)
             time.sleep(5)
@@ -291,13 +309,13 @@ class AutoBunningsChecker:
         # Test API connection first
         if not self.test_api_connection():
             print("❌ Cannot connect to Shopify. Please check credentials.")
-            return
+            return []
         
         # Step 1: Discover metafield structure
         print("\n🔍 Step 1: Discovering metafield structure...")
         if not self.discover_metafields():
             print("❌ No Bunnings URLs found in products.")
-            return
+            return []
         
         # Step 2: Check all discovered URLs
         print(f"\n🔗 Step 2: Checking {len(self.bunnings_urls_found)} Bunnings URLs...")
@@ -346,30 +364,42 @@ class AutoBunningsChecker:
         print(f"⚠️  Other issues: {other}")
         
         # Save detailed results
-        self.save_results(results)
-        
-        # Show broken links
-        if broken_links:
-            print(f"\n🔍 BROKEN LINKS FOUND ({broken}):")
-            print("="*60)
-            for link in broken_links[:10]:  # Show first 10
-                print(f"\n📦 Product: {link['product_title'][:50]}...")
-                print(f"   URL: {link['url'][:70]}...")
-                print(f"   Status: {link['status']}")
-                if link['http_error']:
-                    print(f"   Error: {link['http_error']}")
+        if results:
+            csv_file = self.save_results(results)
+            if csv_file:
+                print(f"\n💾 Results saved to: {csv_file}")
+            else:
+                print(f"\n⚠️ Failed to save results CSV")
             
-            if broken > 10:
-                print(f"\n   ... and {broken - 10} more broken links")
-        
-        # Save broken links separately
-        if broken_links:
-            self.save_broken_links_csv(broken_links)
+            # Show broken links
+            if broken_links:
+                print(f"\n🔍 BROKEN LINKS FOUND ({broken}):")
+                print("="*60)
+                for i, link in enumerate(broken_links[:5], 1):
+                    print(f"\n{i}. Product: {link['product_title'][:50]}...")
+                    print(f"   URL: {link['url'][:70]}...")
+                    print(f"   Status: {link['status']}")
+                    if link['http_error']:
+                        print(f"   Error: {link['http_error']}")
+                
+                if broken > 5:
+                    print(f"\n   ... and {broken - 5} more broken links")
+                
+                # Save broken links separately
+                broken_file = self.save_broken_links_csv(broken_links)
+                if broken_file:
+                    print(f"💾 Broken links saved to: {broken_file}")
+                else:
+                    print(f"⚠️ Failed to save broken links CSV")
+        else:
+            print("\n⚠️ No results to save")
         
         return results
     
     def test_api_connection(self):
         """Test Shopify API connection"""
+        print("🔧 Testing API connection...")
+        
         headers = {
             "X-Shopify-Access-Token": SHOPIFY_TOKEN,
             "Content-Type": "application/json"
@@ -386,6 +416,7 @@ class AutoBunningsChecker:
                 return True
             else:
                 print(f"❌ API Error: {r.status_code}")
+                print(f"   Response: {r.text[:200]}")
                 return False
         except Exception as e:
             print(f"❌ Connection failed: {e}")
@@ -393,75 +424,105 @@ class AutoBunningsChecker:
     
     def save_results(self, results):
         """Save all results to CSV"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"bunnings_broken_links_{timestamp}.csv"
-        
-        with open(filename, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=[
-                "Product_ID",
-                "Product_Title",
-                "Bunnings_URL",
-                "Page_Title",
-                "HTTP_Status",
-                "Status",
-                "Working",
-                "Add_to_Cart_Found",
-                "Error",
-                "Test_Time"
-            ])
-            writer.writeheader()
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"bunnings_results_{timestamp}.csv"
             
-            for r in results:
-                writer.writerow({
-                    "Product_ID": r["product_id"],
-                    "Product_Title": r["product_title"][:100],
-                    "Bunnings_URL": r["url"],
-                    "Page_Title": r["page_title"][:150] if r["page_title"] else "",
-                    "HTTP_Status": r["http_status"] or "",
-                    "Status": r["status"],
-                    "Working": "Yes" if r["is_working"] else "No",
-                    "Add_to_Cart_Found": "Yes" if r["add_to_cart_found"] else "No",
-                    "Error": r["error"] or "",
-                    "Test_Time": r["timestamp"]
-                })
-        
-        print(f"\n💾 All results saved to: {filename}")
+            print(f"\n💾 Saving results to {filename}...")
+            
+            with open(filename, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=[
+                    "Product_ID",
+                    "Product_Title",
+                    "Bunnings_URL",
+                    "Page_Title",
+                    "HTTP_Status",
+                    "Status",
+                    "Working",
+                    "Add_to_Cart_Found",
+                    "Error",
+                    "Test_Time"
+                ])
+                writer.writeheader()
+                
+                for r in results:
+                    writer.writerow({
+                        "Product_ID": r["product_id"],
+                        "Product_Title": r["product_title"][:100] if r["product_title"] else "",
+                        "Bunnings_URL": r["url"],
+                        "Page_Title": r["page_title"][:150] if r.get("page_title") else "",
+                        "HTTP_Status": r["http_status"] or "",
+                        "Status": r["status"],
+                        "Working": "Yes" if r["is_working"] else "No",
+                        "Add_to_Cart_Found": "Yes" if r["add_to_cart_found"] else "No",
+                        "Error": r["error"] or "",
+                        "Test_Time": r["timestamp"]
+                    })
+            
+            # Verify file was created
+            if os.path.exists(filename):
+                file_size = os.path.getsize(filename)
+                print(f"   File created: {filename} ({file_size} bytes)")
+                return filename
+            else:
+                print(f"❌ File not created: {filename}")
+                return None
+                
+        except Exception as e:
+            print(f"❌ Error saving CSV: {e}")
+            import traceback
+            traceback.print_exc()
+            return None
     
     def save_broken_links_csv(self, broken_links):
         """Save only broken links to a separate CSV"""
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"bunnings_broken_only_{timestamp}.csv"
-        
-        with open(filename, 'w', newline='', encoding='utf-8') as f:
-            writer = csv.DictWriter(f, fieldnames=[
-                "Product_ID",
-                "Product_Title",
-                "Broken_URL",
-                "HTTP_Status",
-                "Status",
-                "HTTP_Error",
-                "Test_Time"
-            ])
-            writer.writeheader()
+        try:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"bunnings_broken_{timestamp}.csv"
             
-            for r in broken_links:
-                writer.writerow({
-                    "Product_ID": r["product_id"],
-                    "Product_Title": r["product_title"][:100],
-                    "Broken_URL": r["url"],
-                    "HTTP_Status": r["http_status"] or "",
-                    "Status": r["status"],
-                    "HTTP_Error": r["http_error"] or "",
-                    "Test_Time": r["timestamp"]
-                })
-        
-        print(f"💾 Broken links saved to: {filename}")
+            print(f"💾 Saving broken links to {filename}...")
+            
+            with open(filename, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.DictWriter(f, fieldnames=[
+                    "Product_ID",
+                    "Product_Title",
+                    "Broken_URL",
+                    "HTTP_Status",
+                    "Status",
+                    "HTTP_Error",
+                    "Test_Time"
+                ])
+                writer.writeheader()
+                
+                for r in broken_links:
+                    writer.writerow({
+                        "Product_ID": r["product_id"],
+                        "Product_Title": r["product_title"][:100] if r["product_title"] else "",
+                        "Broken_URL": r["url"],
+                        "HTTP_Status": r["http_status"] or "",
+                        "Status": r["status"],
+                        "HTTP_Error": r["http_error"] or "",
+                        "Test_Time": r["timestamp"]
+                    })
+            
+            if os.path.exists(filename):
+                file_size = os.path.getsize(filename)
+                print(f"   File created: {filename} ({file_size} bytes)")
+                return filename
+            else:
+                print(f"❌ File not created: {filename}")
+                return None
+                
+        except Exception as e:
+            print(f"❌ Error saving broken links CSV: {e}")
+            return None
     
     def close(self):
         """Cleanup"""
         if self.driver:
             try:
                 self.driver.quit()
+                print("✅ Browser closed")
             except:
                 pass
 
@@ -475,6 +536,7 @@ if __name__ == "__main__":
     print("1. Auto-discover your metafield structure")
     print("2. Find all Bunnings URLs")
     print("3. Check which links are broken")
+    print("4. Save results to CSV files")
     print("="*60)
     
     checker = AutoBunningsChecker(headless=True)
@@ -484,7 +546,6 @@ if __name__ == "__main__":
         results = checker.find_broken_links()
         
         if results:
-            # Final summary
             broken_count = sum(1 for r in results if "BROKEN" in r["status"])
             if broken_count > 0:
                 print(f"\n⚠️  ACTION REQUIRED: Found {broken_count} broken Bunnings links!")
@@ -503,3 +564,13 @@ if __name__ == "__main__":
     finally:
         checker.close()
         print("\n✨ Script completed!")
+        
+        # List CSV files created
+        csv_files = [f for f in os.listdir('.') if f.startswith('bunnings_') and f.endswith('.csv')]
+        if csv_files:
+            print(f"\n📁 CSV Files created in current directory:")
+            for file in csv_files:
+                size = os.path.getsize(file)
+                print(f"   - {file} ({size} bytes)")
+        else:
+            print(f"\n⚠️  No CSV files were created")
