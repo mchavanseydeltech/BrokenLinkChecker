@@ -67,17 +67,14 @@ class BunningsChecker:
             if not products:
                 break
 
-            for product in products:
-                pid = product["id"]
-                mf_url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products/{pid}/metafields.json"
-                mf_resp = requests.get(mf_url, headers=headers)
-                mf_resp.raise_for_status()
-
-                metafields = mf_resp.json().get("metafields", [])
-
-                # Debug print to see what metafields exist
-                print(f"Product {pid} metafields: {[mf['key'] + ':' + str(mf['value']) for mf in metafields]}")
-
+           for product in products:
+            pid = product["id"]
+            mf_resp = requests.get(f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/{SHOPIFY_API_VERSION}/products/{pid}/metafields.json", headers=headers)
+            mf_resp.raise_for_status()
+            metafields = mf_resp.json().get("metafields", [])
+            # Debug: print all metafields
+            for mf in metafields:
+                print(f"Product {pid} | {mf['namespace']} | {mf['key']} | {mf['type']} | {mf['value']}")
                 for mf in metafields:
                     if mf["namespace"] == METAFIELD_NAMESPACE and mf["key"] == METAFIELD_KEY:
                         value = mf.get("value", "").strip()
