@@ -13,7 +13,7 @@ from selenium.webdriver.common.by import By
 import undetected_chromedriver as uc
 
 # =========================
-# 🔐 SHOPIFY CONFIG
+# 🔐 SHOPIFY CONFIG (HARDCODED)
 # =========================
 SHOPIFY_STORE = "seydeltest"  # e.g., "seydeltech"
 SHOPIFY_TOKEN = "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"
