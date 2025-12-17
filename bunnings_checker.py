@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
 """
-Bunnings URL Checker – Shopify Product Metafield Mode
+Bunnings URL Checker – Shopify Metafield Mode
 Fetches all Bunnings URLs from product metafields (all products)
+Handles plain URLs or JSON-stored URLs
 Checks each URL for Add to Cart button using Selenium (headless)
 """
 
 import time
 import csv
 import requests
+import json
 from datetime import datetime
 from selenium.webdriver.common.by import By
 import undetected_chromedriver as uc
@@ -15,12 +17,12 @@ import undetected_chromedriver as uc
 # =========================
 # 🔐 SHOPIFY CONFIG (HARDCODED)
 # =========================
-SHOPIFY_STORE = "cassien24"  # e.g., "seydeltech"
-SHOPIFY_TOKEN = "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"
+SHOPIFY_STORE = "seydeltest"  # e.g., 'seydeltech'
+SHOPIFY_TOKEN = "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"
 SHOPIFY_API_VERSION = "2025-10"
 
 METAFIELD_NAMESPACE = "custom"
-METAFIELD_KEY = "au_link"
+METAFIELD_KEY = "bunnings_url"
 # =========================
 
 class BunningsChecker:
@@ -72,20 +74,26 @@ class BunningsChecker:
                 mf_resp.raise_for_status()
 
                 metafields = mf_resp.json().get("metafields", [])
-            for mf in metafields:
-                if mf["namespace"] == METAFIELD_NAMESPACE and mf["key"] == METAFIELD_KEY:
-                    value = mf.get("value", "").strip()
-                    if not value:
-                        continue
-                    # If value is JSON string with "url", parse it
-                    try:
-                        j = json.loads(value)
-                        if isinstance(j, dict) and "url" in j:
-                            value = j["url"]
-                    except:
-                        pass
-                if "bunnings.com.au" in value:
-                urls.append(value)
+
+                # Debug print to see what metafields exist
+                print(f"Product {pid} metafields: {[mf['key'] + ':' + str(mf['value']) for mf in metafields]}")
+
+                for mf in metafields:
+                    if mf["namespace"] == METAFIELD_NAMESPACE and mf["key"] == METAFIELD_KEY:
+                        value = mf.get("value", "").strip()
+                        if not value:
+                            continue
+                        # If value is JSON string with "url", parse it
+                        try:
+                            j = json.loads(value)
+                            if isinstance(j, dict) and "url" in j:
+                                value = j["url"]
+                        except:
+                            pass
+                        if "bunnings.com.au" in value:
+                            urls.append(value)
+
+            # Pagination
             link = r.headers.get("Link")
             if link and 'rel="next"' in link:
                 endpoint = link.split(";")[0].strip("<> ")
