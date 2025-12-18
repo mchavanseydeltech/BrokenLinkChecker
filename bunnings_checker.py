@@ -21,7 +21,7 @@ import undetected_chromedriver as uc
 # =========================
 SHOPIFY_STORE = "seydeltest"
 SHOPIFY_TOKEN = "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"
-SHOPIFY_API_VERSION = "2025-10"
+SHOPIFY_API_VERSION = "2024-10"
 # =========================
 
 class AutoBunningsChecker:
