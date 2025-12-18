@@ -2,6 +2,12 @@ name: Bunnings Checker
 
 on:
   workflow_dispatch:
+  schedule:
+    # Run every Monday at 9 AM UTC
+    - cron: '0 9 * * 1'
+
+permissions:
+  contents: write
 
 jobs:
   run-bunnings-checker:
@@ -16,23 +22,126 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Chromium
+      - name: Install Chrome dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y chromium chromium-driver
+          sudo apt-get install -y wget unzip
+          # Install Chrome
+          wget -q -O - https://dl-ssl.google.com/linux/linux_signing_key.pub | sudo apt-key add -
+          echo "deb [arch=amd64] http://dl.google.com/linux/chrome/deb/ stable main" | sudo tee /etc/apt/sources.list.d/google-chrome.list
+          sudo apt-get update
+          sudo apt-get install -y google-chrome-stable
+          # Install ChromeDriver matching Chrome version
+          CHROME_VERSION=$(google-chrome --version | awk '{print $3}')
+          CHROMEDRIVER_VERSION=$(echo $CHROME_VERSION | cut -d'.' -f1)
+          wget -q "https://storage.googleapis.com/chrome-for-testing-public/${CHROME_VERSION}/linux64/chromedriver-linux64.zip"
+          unzip -q chromedriver-linux64.zip
+          sudo mv chromedriver-linux64/chromedriver /usr/local/bin/
+          sudo chmod +x /usr/local/bin/chromedriver
+          rm -rf chromedriver-linux64.zip chromedriver-linux64/
 
       - name: Install Python dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install selenium undetected-chromedriver requests
+          pip install undetected-chromedriver==3.5.4 requests==2.31.0 selenium==4.15.2
+
+      - name: Create config file with secrets
+        run: |
+          echo "#!/usr/bin/env python3
+          '''
+          Bunnings URL Checker – Automatic Broken Link Finder
+          '''
+          import os
+          
+          # Shopify Config from Secrets
+          SHOPIFY_STORE = '${{ secrets.SHOPIFY_STORE }}'
+          SHOPIFY_TOKEN = '${{ secrets.SHOPIFY_TOKEN }}'
+          SHOPIFY_API_VERSION = '2024-10'
+          
+          # Save to a config file
+          with open('config.py', 'w') as f:
+              f.write(f'''
+          SHOPIFY_STORE = \"{SHOPIFY_STORE}\"
+          SHOPIFY_TOKEN = \"{SHOPIFY_TOKEN}\"
+          SHOPIFY_API_VERSION = \"{SHOPIFY_API_VERSION}\"
+          ''')
+          echo 'Config file created'
 
       - name: Run Bunnings Checker Script
+        timeout-minutes: 30
+        env:
+          DISPLAY: ':99'
         run: |
-          echo "Running Bunnings Checker"
+          # Start virtual display for headless Chrome
+          sudo apt-get install -y xvfb
+          Xvfb :99 -screen 0 1920x1080x24 &
+          export DISPLAY=:99
+          
+          echo "Starting Bunnings Checker..."
+          # Replace hardcoded credentials with config import
+          sed -i "s/SHOPIFY_STORE = .*/from config import SHOPIFY_STORE, SHOPIFY_TOKEN, SHOPIFY_API_VERSION/" bunnings_checker.py
+          sed -i "s/SHOPIFY_TOKEN = .*//" bunnings_checker.py
+          sed -i "s/SHOPIFY_API_VERSION = .*//" bunnings_checker.py
+          
           python bunnings_checker.py
+          
+          echo "Script execution completed"
+
+      - name: List generated files
+        run: |
+          echo "Generated files:"
+          ls -la *.csv || echo "No CSV files generated"
+          ls -la bunnings_*.csv || echo "No Bunnings CSV files"
 
       - name: Upload CSV results
         uses: actions/upload-artifact@v4
         with:
-          name: bunnings-results
-          path: bunnings_results_*.csv
+          name: bunnings-results-${{ github.run_id }}
+          path: |
+            bunnings_*.csv
+            bunnings_url_check_*.csv
+          retention-days: 7
+
+      - name: Upload results to repository
+        if: github.ref == 'refs/heads/main'
+        run: |
+          # Create results directory if it doesn't exist
+          mkdir -p results
+          
+          # Move CSV files to results directory
+          mv bunnings_*.csv results/ 2>/dev/null || true
+          mv bunnings_url_check_*.csv results/ 2>/dev/null || true
+          
+          # Commit and push results
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          git add results/
+          git commit -m "Add Bunnings checker results - ${{ github.run_id }}" || echo "No changes to commit"
+          git push origin main || echo "No changes to push"
+
+      - name: Create summary report
+        if: always()
+        run: |
+          echo "## Bunnings Checker Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          
+          # Count CSV files
+          CSV_COUNT=$(ls -1 bunnings_*.csv bunnings_url_check_*.csv 2>/dev/null | wc -l)
+          if [ $CSV_COUNT -gt 0 ]; then
+            echo "✅ **CSV files generated:** $CSV_COUNT" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Generated files:**" >> $GITHUB_STEP_SUMMARY
+            for file in bunnings_*.csv bunnings_url_check_*.csv; do
+              if [ -f "$file" ]; then
+                SIZE=$(du -h "$file" | cut -f1)
+                LINES=$(wc -l < "$file" || echo "0")
+                echo "- \`$file\` ($SIZE, $LINES lines)" >> $GITHUB_STEP_SUMMARY
+              fi
+            done
+          else
+            echo "❌ **No CSV files generated**" >> $GITHUB_STEP_SUMMARY
+          fi
+          
+          # Add workflow run link
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "**Workflow run:** [${{ github.run_id }}](https://github.com/${{ github.repository }}/actions/runs/${{ github.run_id }})" >> $GITHUB_STEP_SUMMARY
