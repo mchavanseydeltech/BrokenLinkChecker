@@ -22,7 +22,7 @@ SHOPIFY_TOKEN = "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"
 SHOPIFY_API_VERSION = "2024-10"
 
 METAFIELD_NAMESPACE = "custom"
-METAFIELD_KEY = "au_link"
+METAFIELD_KEY = "bunnings_au_link"
 # =========================
 
 
@@ -54,7 +54,7 @@ class BunningsChecker:
         )
         return match.group(0) if match else None
 
-    # ---------- Get Shopify URLs from custom.au_link ----------
+    # ---------- Get Shopify URLs from custom. ----------
     def fetch_urls(self):
         headers = {
             "X-Shopify-Access-Token": SHOPIFY_TOKEN,
