@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
 """
-COMBINED BUNNINGS LINK CHECKER - FIXED VERSION
-- Extracts Bunnings URLs from Shopify metafields (from File 1)
-- Uses enhanced detection logic (from File 2) to check product availability
-- FIXED: Removes ... from URLs before testing
+Bunnings URL Checker – Automatic Broken Link Finder
+Finds your actual metafield structure and checks for broken links
 """
 
 import time
 import csv
+import requests
 import json
 import re
-import os
-import requests
 from datetime import datetime
 from requests.exceptions import RequestException, Timeout, SSLError, ConnectionError
 from selenium.webdriver.common.by import By
+from selenium.webdriver.support.ui import WebDriverWait
+from selenium.webdriver.support import expected_conditions as EC
 import undetected_chromedriver as uc
 
 # =========================
@@ -25,73 +24,78 @@ SHOPIFY_TOKEN = "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"
 SHOPIFY_API_VERSION = "2024-10"
 # =========================
 
-class CombinedBunningsChecker:
-    def __init__(self, headless=False):
+class AutoBunningsChecker:
+    def __init__(self, headless=True):
         self.headless = headless
         self.driver = None
         self.session = requests.Session()
+        self.session.headers.update({
+            'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        })
         self.bunnings_urls_found = []
         self.metafield_patterns = {}
         
     def setup_driver(self):
-        """Setup browser with File 2's better configuration"""
-        try:
-            options = uc.ChromeOptions()
-            
-            if self.headless:
-                options.add_argument('--headless=new')
-            
-            options.add_argument('--no-sandbox')
-            options.add_argument('--disable-dev-shm-usage')
-            options.add_argument('--window-size=1920,1080')
-            
-            # Block location and notifications (from File 2)
-            options.add_experimental_option("prefs", {
-                "profile.default_content_setting_values.geolocation": 2,
-                "profile.default_content_setting_values.notifications": 2,
-            })
-            
-            user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-            options.add_argument(f'user-agent={user_agent}')
-            
-            self.driver = uc.Chrome(options=options, use_subprocess=True)
-            
-            print("✅ Browser ready")
-            
-        except Exception as e:
-            print(f"❌ Browser error: {e}")
-            raise
+        """Setup browser for Selenium tests"""
+        options = uc.ChromeOptions()
+        if self.headless:
+            options.add_argument("--headless=new")
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--window-size=1920,1080")
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        
+        user_agent = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        options.add_argument(f'user-agent={user_agent}')
+        
+        # Add more options to avoid detection
+        options.add_argument("--disable-web-security")
+        options.add_argument("--disable-features=IsolateOrigins,site-per-process")
+        options.add_argument("--disable-site-isolation-trials")
+        
+        self.driver = uc.Chrome(options=options, use_subprocess=True)
     
-    def clean_url(self, url):
+    def check_http_status(self, url):
         """
-        Clean URL by removing ellipsis (...) and fixing common issues
+        Fast HTTP check for broken links
+        Returns: (is_accessible: bool, status_code: int, error_message: str)
         """
-        if not url:
-            return ""
-        
-        url = str(url).strip()
-        
-        # Remove trailing ellipsis (...)
-        url = re.sub(r'\.\.\.+$', '', url)
-        
-        # Remove trailing dots that aren't part of domain
-        if url.endswith('.') and not url.endswith('.com.au.'):
-            url = url[:-1]
-        
-        # Remove any trailing spaces
-        url = url.rstrip()
-        
-        # Ensure it starts with http:// or https://
-        if url and not url.startswith(('http://', 'https://')):
-            url = 'https://' + url
-        
-        # Remove any URL-encoded ellipsis
-        url = url.replace('%2E%2E%2E', '')
-        
-        return url
+        try:
+            response = self.session.head(url, timeout=15, allow_redirects=True, verify=True)
+            status_code = response.status_code
+            
+            if 200 <= status_code < 400:
+                return True, status_code, None
+            elif status_code == 404:
+                return False, status_code, "Page not found (404)"
+            elif status_code == 403:
+                return False, status_code, "Access forbidden (403)"
+            elif 500 <= status_code < 600:
+                return False, status_code, f"Server error ({status_code})"
+            else:
+                return False, status_code, f"HTTP error ({status_code})"
+                
+        except Timeout:
+            return False, None, "Request timeout (15s)"
+        except (ConnectionError, SSLError):
+            # Try with GET if HEAD fails
+            try:
+                response = self.session.get(url, timeout=15, allow_redirects=True, verify=True, stream=True)
+                status_code = response.status_code
+                
+                if 200 <= status_code < 400:
+                    return True, status_code, None
+                else:
+                    return False, status_code, f"HTTP error ({status_code})"
+            except Exception as e:
+                return False, None, f"Connection error: {str(e)[:100]}"
+        except RequestException as e:
+            return False, None, f"Request error: {str(e)[:100]}"
+        except Exception as e:
+            return False, None, f"Unexpected error: {str(e)[:100]}"
     
     def extract_clean_url(self, value):
-        """Extract clean URL from various formats (from File 1) - FIXED VERSION"""
+        """Extract clean URL from various formats"""
         if not value:
             return ""
         
@@ -105,94 +109,28 @@ class CombinedBunningsChecker:
                     if key in data and data[key]:
                         url = str(data[key]).strip()
                         if "bunnings.com.au" in url.lower():
-                            return self.clean_url(url)
+                            return url
         except:
             pass
         
         # Look for URL pattern
+        url_pattern = r'https?://(?:www\.)?bunnings\.com\.au/[^\s<>"\']+'
+        matches = re.findall(url_pattern, value, re.IGNORECASE)
+        if matches:
+            return matches[0]
+        
+        # General URL pattern if Bunnings specific not found
         url_pattern = r'https?://[^\s<>"\']+'
         matches = re.findall(url_pattern, value)
         for match in matches:
             if "bunnings.com.au" in match.lower():
-                return self.clean_url(match)
+                return match
         
-        # If no pattern found but contains bunnings.com.au, try to extract
-        if "bunnings.com.au" in value.lower():
-            # Find the URL part
-            start = value.lower().find("bunnings.com.au")
-            if start > 0:
-                # Go back to find the start of URL
-                http_start = value.rfind('http', 0, start)
-                if http_start != -1:
-                    url_part = value[http_start:]
-                    # Take until next space or end
-                    space_pos = url_part.find(' ')
-                    if space_pos != -1:
-                        url_part = url_part[:space_pos]
-                    return self.clean_url(url_part)
-        
-        return self.clean_url(value)
-    
-    def check_http_status(self, url):
-        """
-        Fast HTTP check for broken links (from File 1)
-        Returns: (is_accessible: bool, status_code: int, error_message: str)
-        """
-        try:
-            # Clean the URL first
-            url = self.clean_url(url)
-            
-            # Add headers to look more like a browser
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-                'Accept-Language': 'en-US,en;q=0.5',
-                'Accept-Encoding': 'gzip, deflate, br',
-                'Connection': 'keep-alive',
-                'Upgrade-Insecure-Requests': '1',
-                'Sec-Fetch-Dest': 'document',
-                'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
-                'Sec-Fetch-User': '?1',
-                'Cache-Control': 'max-age=0'
-            }
-            
-            try:
-                response = self.session.head(url, timeout=15, allow_redirects=True, verify=True, headers=headers)
-            except (ConnectionError, SSLError):
-                response = self.session.get(url, timeout=15, allow_redirects=True, verify=True, stream=True, headers=headers)
-            
-            status_code = response.status_code
-            
-            if 200 <= status_code < 400:
-                return True, status_code, None
-            elif status_code == 404:
-                return False, status_code, "Page not found (404)"
-            elif status_code == 403:
-                # Try with a GET request instead of HEAD
-                try:
-                    response = self.session.get(url, timeout=15, allow_redirects=True, verify=True, headers=headers)
-                    if 200 <= response.status_code < 400:
-                        return True, response.status_code, "Works with GET"
-                    else:
-                        return False, response.status_code, f"HTTP {response.status_code} with GET"
-                except:
-                    return False, status_code, "Access forbidden (403)"
-            elif 500 <= status_code < 600:
-                return False, status_code, f"Server error ({status_code})"
-            else:
-                return False, status_code, f"HTTP error ({status_code})"
-                
-        except Timeout:
-            return False, None, "Request timeout (15s)"
-        except RequestException as e:
-            return False, None, f"Request error: {str(e)[:100]}"
-        except Exception as e:
-            return False, None, f"Unexpected error: {str(e)[:100]}"
+        return value
     
     def discover_metafields(self, max_products=50):
         """
-        Automatically discover how Bunnings URLs are stored (from File 1)
+        Automatically discover how Bunnings URLs are stored
         """
         print("\n🔍 DISCOVERING METAFIELD STRUCTURE")
         print("="*60)
@@ -238,11 +176,6 @@ class CombinedBunningsChecker:
                         if "bunnings.com.au" in value.lower():
                             clean_url = self.extract_clean_url(value)
                             if clean_url and "bunnings.com.au" in clean_url.lower():
-                                # Clean the URL again to be sure
-                                clean_url = self.clean_url(clean_url)
-                                
-                                print(f"   Found: {title[:30]}... -> {clean_url[:60]}...")
-                                
                                 self.bunnings_urls_found.append({
                                     "product_id": pid,
                                     "product_title": title,
@@ -262,12 +195,6 @@ class CombinedBunningsChecker:
             print(f"   Products examined: {len(products)}")
             print(f"   Bunnings URLs found: {len(self.bunnings_urls_found)}")
             
-            # Show first few URLs to verify they're clean
-            if self.bunnings_urls_found:
-                print(f"\n📋 Sample of cleaned URLs:")
-                for i, url_info in enumerate(self.bunnings_urls_found[:5], 1):
-                    print(f"   {i}. {url_info['url'][:80]}...")
-            
             if self.metafield_patterns:
                 print(f"\n📊 Metafield patterns discovered:")
                 for pattern, count in sorted(self.metafield_patterns.items(), key=lambda x: x[1], reverse=True):
@@ -279,201 +206,268 @@ class CombinedBunningsChecker:
             print(f"❌ Discovery error: {e}")
             return False
     
-    def check_bunnings_url(self, url_info):
+    def find_add_to_cart_button(self):
+        """Find Add to Cart button on Bunnings page"""
+        try:
+            # Wait for page to load
+            WebDriverWait(self.driver, 10).until(
+                EC.presence_of_element_located((By.TAG_NAME, "body"))
+            )
+            
+            # Look for Add to Cart button using multiple strategies
+            button_selectors = [
+                # Button with text
+                "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add to cart')]",
+                "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add to trolley')]",
+                "//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add to cart')]",
+                "//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add to trolley')]",
+                # Button with specific classes
+                "//button[contains(@class, 'add-to-cart')]",
+                "//button[contains(@class, 'addToCart')]",
+                "//button[contains(@class, 'btn-cart')]",
+                "//button[@data-testid='add-to-cart-button']",
+                # Input button
+                "//input[@type='submit' and contains(translate(@value, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'add to cart')]",
+            ]
+            
+            for selector in button_selectors:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, selector)
+                    for element in elements:
+                        try:
+                            if element.is_displayed() and element.is_enabled():
+                                return True, element
+                        except:
+                            continue
+                except:
+                    continue
+            
+            # Also check for "Buy Online" button which might indicate availability
+            buy_online_selectors = [
+                "//button[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'buy online')]",
+                "//a[contains(translate(., 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), 'buy online')]",
+            ]
+            
+            for selector in buy_online_selectors:
+                try:
+                    elements = self.driver.find_elements(By.XPATH, selector)
+                    for element in elements:
+                        try:
+                            if element.is_displayed() and element.is_enabled():
+                                return True, element
+                        except:
+                            continue
+                except:
+                    continue
+            
+            return False, None
+            
+        except Exception as e:
+            print(f"   Button search error: {str(e)[:50]}")
+            return False, None
+    
+    def check_single_url(self, url_info):
         """
-        ENHANCED CHECK: Using File 2's better detection logic
+        Check if a Bunnings URL is broken
         """
         url = url_info["url"]
-        product_title = url_info["product_title"]
-        
-        # Clean URL one more time before testing
-        url = self.clean_url(url)
-        
-        print(f"\n🔗 Testing: {product_title[:40]}...")
-        print(f"   URL: {url[:80]}...")
         
         result = {
-            'product_id': url_info['product_id'],
-            'product_title': product_title,
-            'url': url,
-            'page_title': 'Not loaded',
-            'status': 'not_tested',
-            'is_working': False,
-            'add_to_cart_found': False,
-            'error': None,
-            'http_status': None,
-            'http_error': None,
-            'timestamp': datetime.now().isoformat()
+            "product_id": url_info["product_id"],
+            "product_title": url_info["product_title"],
+            "url": url,
+            "page_title": "",
+            "status": "not_tested",
+            "http_status": None,
+            "http_error": None,
+            "is_working": False,
+            "add_to_cart_found": False,
+            "error": None,
+            "timestamp": datetime.now().isoformat()
         }
         
-        # First, do a quick HTTP check (from File 1)
+        # STEP 1: Fast HTTP check
+        print(f"   Checking: {url}")
         http_accessible, http_status, http_error = self.check_http_status(url)
         result["http_status"] = http_status
         result["http_error"] = http_error
         
         if not http_accessible:
             if http_status == 404:
-                result['status'] = 'BROKEN_404'
-                print(f"   ❌ BROKEN_404")
+                result["status"] = "BROKEN_404"
             elif http_status == 403:
-                # Try a different approach for 403 - sometimes it's a false positive
-                print(f"   ⚠️  Got 403, trying browser check anyway...")
-                # We'll continue to browser check
+                result["status"] = "BROKEN_403"
             elif http_status and 500 <= http_status < 600:
-                result['status'] = f'BROKEN_SERVER_{http_status}'
-                print(f"   ❌ BROKEN_SERVER_{http_status}")
-                return result
+                result["status"] = f"BROKEN_SERVER_{http_status}"
             else:
-                result['status'] = 'BROKEN_HTTP_ERROR'
-                print(f"   ❌ BROKEN_HTTP_ERROR: {http_error}")
-                return result
+                result["status"] = "BROKEN_HTTP_ERROR"
+            return result
         
-        # If HTTP check passed OR it was 403 (might be false positive), do browser verification
+        # STEP 2: Browser verification
         try:
             if not self.driver:
                 self.setup_driver()
             
-            # 1. Load the URL
-            print(f"   Loading in browser...")
             self.driver.get(url)
-            time.sleep(8)  # Wait for initial load (File 2 timing)
+            time.sleep(8)  # Increased wait time for Bunnings page to load
             
-            # 2. Get page title
             title = self.driver.title
-            result['page_title'] = title
-            print(f"   Title: {title[:60]}...")
+            result["page_title"] = title
             
-            # 3. Check for Cloudflare (from File 2)
-            if "Just a moment" in title:
-                print("   ⚠️ Cloudflare, waiting...")
-                time.sleep(10)
-                title = self.driver.title
-                
-                if "Just a moment" in title:
-                    result['status'] = 'cloudflare_blocked'
-                    print("   ❌ Cloudflare blocked")
-                    return result
-            
-            # 4. Check if it's a Bunnings page
-            current_url = self.driver.current_url
+            # Check if it's actually a Bunnings page
             page_source = self.driver.page_source.lower()
-            if not ('bunnings' in page_source or 'bunnings.com.au' in title.lower() or 'bunnings.com.au' in current_url.lower()):
-                result['status'] = 'NOT_BUNNINGS_PAGE'
-                print("   ❌ Not a Bunnings page")
-                print(f"   Current URL: {current_url[:80]}...")
+            if "bunnings" not in page_source and "bunnings.com.au" not in title.lower():
+                result["status"] = "NOT_BUNNINGS_PAGE"
                 return result
             
-            # 5. Look for Add to Cart button (File 2's enhanced detection)
-            time.sleep(3)
+            # Check for Add to Cart button
+            cart_found, cart_element = self.find_add_to_cart_button()
+            result["add_to_cart_found"] = cart_found
             
-            # Method 1: Search for button text (File 2)
-            add_to_cart_found = False
+            # Check for out of stock indicators
+            page_text = self.driver.page_source.lower()
+            out_of_stock_indicators = [
+                "out of stock",
+                "out-of-stock",
+                "sold out",
+                "no longer available",
+                "discontinued",
+                "this product is unavailable",
+                "currently unavailable",
+                "unavailable online"
+            ]
             
-            cart_texts = ['Add to Cart', 'Add to Trolley', 'Add to cart', 'Add to trolley', 'ADD TO CART']
-            for text in cart_texts:
-                try:
-                    elements = self.driver.find_elements(By.XPATH, f"//*[contains(translate(text(), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{text.lower()}')]")
-                    for element in elements:
-                        try:
-                            if element.is_displayed():
-                                add_to_cart_found = True
-                                print(f"   ✓ Found: '{text}'")
-                                break
-                        except:
-                            continue
-                    if add_to_cart_found:
-                        break
-                except:
-                    continue
+            out_of_stock_found = any(indicator in page_text for indicator in out_of_stock_indicators)
             
-            # Method 2: Search for common selectors (File 2)
-            if not add_to_cart_found:
-                selectors = [
-                    "button[data-testid='add-to-cart']",
-                    "button[data-test-id='add-to-cart']",
-                    ".add-to-cart-button",
-                    ".add-to-cart",
-                    "#add-to-cart",
-                    "[aria-label*='Add to cart']",
-                    "[aria-label*='Add to trolley']",
-                    "button.btn-primary",
-                    "button.btn--primary",
-                    "button[type='submit']",
-                    "button:contains('Add')"
-                ]
-                
-                for selector in selectors:
-                    try:
-                        if ":contains" in selector:
-                            # Handle pseudo selector
-                            continue
-                        elements = self.driver.find_elements(By.CSS_SELECTOR, selector)
-                        for element in elements:
-                            try:
-                                if element.is_displayed():
-                                    text = element.text.lower()
-                                    if 'add to' in text or 'cart' in text or 'trolley' in text:
-                                        add_to_cart_found = True
-                                        print(f"   ✓ Found via: {selector}")
-                                        break
-                            except:
-                                continue
-                        if add_to_cart_found:
-                            break
-                    except:
-                        continue
-            
-            result['add_to_cart_found'] = add_to_cart_found
-            
-            # 6. Determine result (File 2's better categorization)
-            if add_to_cart_found:
-                result['status'] = 'WORKING'
-                result['is_working'] = True
-                print("   ✅ WORKING - Add to Cart found")
-            else:
-                # Check why not working (File 2's detailed checks)
-                page_text = self.driver.page_source.lower()
-                
-                if 'out of stock' in page_text:
-                    result['status'] = 'OUT_OF_STOCK'
-                    print("   ⚠️ OUT OF STOCK")
-                elif 'product not found' in page_text or '404' in page_text or 'page not found' in page_text:
-                    result['status'] = 'PRODUCT_NOT_FOUND'
-                    print("   ❌ 404 - Product not found")
-                elif 'no longer available' in page_text or 'discontinued' in page_text:
-                    result['status'] = 'DISCONTINUED'
-                    print("   ❌ Discontinued")
-                elif 'sold out' in page_text:
-                    result['status'] = 'SOLD_OUT'
-                    print("   ⚠️ SOLD OUT")
-                elif 'access denied' in page_text or '403' in page_text:
-                    result['status'] = 'ACCESS_DENIED'
-                    print("   ❌ Access Denied")
+            # NEW LOGIC: Add to Cart button found = ACTIVE
+            if cart_found:
+                if out_of_stock_found:
+                    result["status"] = "OUT_OF_STOCK"
+                    result["is_working"] = False  # Page exists but product is out of stock
                 else:
-                    # Take screenshot for debugging
-                    timestamp = datetime.now().strftime("%H%M%S")
-                    screenshot_file = f"screenshot_{product_title[:20]}_{timestamp}.png"
-                    try:
-                        self.driver.save_screenshot(screenshot_file)
-                        print(f"   📸 Screenshot saved: {screenshot_file}")
-                    except:
-                        pass
-                    
-                    result['status'] = 'NO_ADD_TO_CART'
-                    print("   ❌ No Add to Cart button")
-            
+                    result["status"] = "ACTIVE"
+                    result["is_working"] = True
+            else:
+                # No Add to Cart button found
+                if out_of_stock_found:
+                    result["status"] = "OUT_OF_STOCK"
+                elif "404" in page_text or "page not found" in page_text:
+                    result["status"] = "BROKEN_JS_404"
+                elif "no results found" in page_text or "product not found" in page_text:
+                    result["status"] = "PRODUCT_NOT_FOUND"
+                else:
+                    result["status"] = "NO_ADD_TO_CART"
+        
         except Exception as e:
-            result['status'] = 'BROWSER_ERROR'
-            result['error'] = str(e)[:100]
-            print(f"   ❌ Browser Error: {str(e)[:50]}...")
+            result["status"] = "BROWSER_ERROR"
+            result["error"] = str(e)[:100]
         
         return result
     
-    # Rest of the methods remain the same...
-    # test_api_connection, run_complete_check, save_results, etc.
+    def find_broken_links(self):
+        """
+        Main function: Find all Bunnings URLs and check which are broken
+        """
+        print("\n" + "="*60)
+        print("🔗 AUTOMATIC BROKEN LINK FINDER")
+        print("="*60)
+        
+        # Test API connection first
+        if not self.test_api_connection():
+            print("❌ Cannot connect to Shopify. Please check credentials.")
+            return
+        
+        # Step 1: Discover metafield structure
+        print("\n🔍 Step 1: Discovering metafield structure...")
+        if not self.discover_metafields():
+            print("❌ No Bunnings URLs found in products.")
+            return
+        
+        # Step 2: Check all discovered URLs
+        print(f"\n🔗 Step 2: Checking {len(self.bunnings_urls_found)} Bunnings URLs...")
+        print("="*60)
+        
+        results = []
+        broken_links = []
+        active_links = []
+        out_of_stock_links = []
+        
+        for i, url_info in enumerate(self.bunnings_urls_found, 1):
+            product_title = url_info["product_title"]
+            url = url_info["url"]
+            
+            print(f"[{i}/{len(self.bunnings_urls_found)}] Product: {product_title[:40]}...")
+            
+            result = self.check_single_url(url_info)
+            results.append(result)
+            
+            # Classify result based on NEW LOGIC
+            if "BROKEN" in result["status"]:
+                broken_links.append(result)
+                print(f"   ❌ {result['status']}")
+            elif result["status"] == "ACTIVE":
+                active_links.append(result)
+                print(f"   ✅ ACTIVE (Add to Cart button found)")
+            elif result["status"] == "OUT_OF_STOCK":
+                out_of_stock_links.append(result)
+                print(f"   ⚠️  OUT OF STOCK (Page exists but no stock)")
+            else:
+                print(f"   ⚠️  {result['status']}")
+            
+            # Small delay between requests
+            if i < len(self.bunnings_urls_found):
+                time.sleep(3)
+        
+        # Step 3: Save and display results
+        print("\n" + "="*60)
+        print("📊 RESULTS SUMMARY (NEW LOGIC)")
+        print("="*60)
+        
+        total = len(results)
+        broken = len(broken_links)
+        active = len(active_links)
+        out_of_stock = len(out_of_stock_links)
+        other = total - broken - active - out_of_stock
+        
+        print(f"Total URLs checked: {total}")
+        print(f"✅ Active links (Add to Cart found): {active}")
+        print(f"⚠️  Out of stock: {out_of_stock}")
+        print(f"❌ Broken links: {broken}")
+        print(f"🔍 Other issues: {other}")
+        
+        # Save detailed results
+        self.save_results(results)
+        
+        # Show broken links
+        if broken_links:
+            print(f"\n🔍 BROKEN LINKS FOUND ({broken}):")
+            print("="*60)
+            for link in broken_links[:10]:  # Show first 10
+                print(f"\n📦 Product: {link['product_title'][:50]}...")
+                print(f"   URL: {link['url']}")
+                print(f"   Status: {link['status']}")
+                if link['http_error']:
+                    print(f"   Error: {link['http_error']}")
+            
+            if broken > 10:
+                print(f"\n   ... and {broken - 10} more broken links")
+        
+        # Save broken links separately
+        if broken_links:
+            self.save_broken_links_csv(broken_links)
+        
+        # Save active links
+        if active_links:
+            self.save_active_links_csv(active_links)
+        
+        # Save out of stock links
+        if out_of_stock_links:
+            self.save_out_of_stock_csv(out_of_stock_links)
+        
+        return results
     
     def test_api_connection(self):
-        """Test Shopify API connection (from File 1)"""
+        """Test Shopify API connection"""
         headers = {
             "X-Shopify-Access-Token": SHOPIFY_TOKEN,
             "Content-Type": "application/json"
@@ -495,55 +489,10 @@ class CombinedBunningsChecker:
             print(f"❌ Connection failed: {e}")
             return False
     
-    def run_complete_check(self):
-        """
-        Main function: Find Bunnings URLs from metafields and check them
-        """
-        print("\n" + "="*60)
-        print("🔗 COMBINED BUNNINGS LINK CHECKER - FIXED")
-        print("="*60)
-        print("This script will:")
-        print("1. Discover Bunnings URLs from Shopify metafields")
-        print("2. CLEAN URLs (remove ...)")
-        print("3. Check each URL with enhanced detection")
-        print("4. Save detailed results")
-        print("="*60)
-        
-        # Test API connection first
-        if not self.test_api_connection():
-            print("❌ Cannot connect to Shopify. Please check credentials.")
-            return []
-        
-        # Step 1: Discover metafield structure
-        print("\n🔍 Step 1: Discovering and cleaning metafield URLs...")
-        if not self.discover_metafields():
-            print("❌ No Bunnings URLs found in products.")
-            return []
-        
-        # Step 2: Check all discovered URLs with enhanced detection
-        print(f"\n🔗 Step 2: Checking {len(self.bunnings_urls_found)} Bunnings URLs...")
-        print("="*60)
-        
-        results = []
-        
-        for i, url_info in enumerate(self.bunnings_urls_found, 1):
-            result = self.check_bunnings_url(url_info)
-            results.append(result)
-            
-            # Small delay between requests
-            if i < len(self.bunnings_urls_found):
-                time.sleep(2)
-        
-        # Step 3: Save and display results
-        self.save_results(results)
-        self.print_summary(results)
-        
-        return results
-    
     def save_results(self, results):
-        """Save all results to CSV with enhanced fields"""
+        """Save all results to CSV"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"bunnings_combined_results_{timestamp}.csv"
+        filename = f"bunnings_url_check_{timestamp}.csv"
         
         with open(filename, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=[
@@ -553,49 +502,31 @@ class CombinedBunningsChecker:
                 "Page_Title",
                 "HTTP_Status",
                 "Status",
-                "Working",
                 "Add_to_Cart_Found",
                 "Error",
-                "Test_Time",
-                "Metafield_Namespace",
-                "Metafield_Key"
+                "Test_Time"
             ])
             writer.writeheader()
             
             for r in results:
-                # Find the original metafield info for this result
-                metafield_info = None
-                for url_info in self.bunnings_urls_found:
-                    if url_info['product_id'] == r['product_id'] and url_info['url'] == r['url']:
-                        metafield_info = url_info
-                        break
-                
                 writer.writerow({
                     "Product_ID": r["product_id"],
                     "Product_Title": r["product_title"][:100],
-                    "Bunnings_URL": r["url"],
+                    "Bunnings_URL": r["url"],  # Full URL, no truncation
                     "Page_Title": r["page_title"][:150] if r["page_title"] else "",
                     "HTTP_Status": r["http_status"] or "",
                     "Status": r["status"],
-                    "Working": "Yes" if r["is_working"] else "No",
                     "Add_to_Cart_Found": "Yes" if r["add_to_cart_found"] else "No",
                     "Error": r["error"] or "",
-                    "Test_Time": r["timestamp"],
-                    "Metafield_Namespace": metafield_info["namespace"] if metafield_info else "",
-                    "Metafield_Key": metafield_info["key"] if metafield_info else ""
+                    "Test_Time": r["timestamp"]
                 })
         
-        print(f"\n💾 Complete results saved to: {filename}")
-        
-        # Also save broken links separately
-        broken_links = [r for r in results if not r["is_working"]]
-        if broken_links:
-            self.save_broken_links_csv(broken_links)
+        print(f"\n💾 All results saved to: {filename}")
     
     def save_broken_links_csv(self, broken_links):
         """Save only broken links to a separate CSV"""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"bunnings_broken_only_{timestamp}.csv"
+        filename = f"bunnings_broken_links_{timestamp}.csv"
         
         with open(filename, 'w', newline='', encoding='utf-8') as f:
             writer = csv.DictWriter(f, fieldnames=[
@@ -604,8 +535,7 @@ class CombinedBunningsChecker:
                 "Broken_URL",
                 "HTTP_Status",
                 "Status",
-                "Page_Title",
-                "Error",
+                "HTTP_Error",
                 "Test_Time"
             ])
             writer.writeheader()
@@ -614,70 +544,76 @@ class CombinedBunningsChecker:
                 writer.writerow({
                     "Product_ID": r["product_id"],
                     "Product_Title": r["product_title"][:100],
-                    "Broken_URL": r["url"],
+                    "Broken_URL": r["url"],  # Full URL
                     "HTTP_Status": r["http_status"] or "",
                     "Status": r["status"],
-                    "Page_Title": r["page_title"][:100] if r["page_title"] else "",
-                    "Error": r["error"] or "",
+                    "HTTP_Error": r["http_error"] or "",
                     "Test_Time": r["timestamp"]
                 })
         
         print(f"💾 Broken links saved to: {filename}")
     
-    def print_summary(self, results):
-        """Print summary statistics (enhanced from File 2)"""
-        if not results:
-            return
+    def save_active_links_csv(self, active_links):
+        """Save active links to a separate CSV"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"bunnings_active_links_{timestamp}.csv"
         
-        working = sum(1 for r in results if r['is_working'])
-        broken = len(results) - working
-        
-        print("\n" + "="*60)
-        print("📋 SUMMARY")
-        print("="*60)
-        print(f"Total URLs Tested: {len(results)}")
-        print(f"✅ Working: {working}")
-        print(f"❌ Not Working: {broken}")
-        
-        # Detailed breakdown
-        status_counts = {}
-        for r in results:
-            status = r['status']
-            status_counts[status] = status_counts.get(status, 0) + 1
-        
-        print("\n📈 Detailed Breakdown:")
-        print("-" * 40)
-        
-        # Group similar statuses
-        status_groups = {
-            "Working": ["WORKING"],
-            "Out of Stock": ["OUT_OF_STOCK", "SOLD_OUT"],
-            "Product Issues": ["PRODUCT_NOT_FOUND", "DISCONTINUED", "NO_ADD_TO_CART", "NOT_BUNNINGS_PAGE"],
-            "HTTP Errors": ["BROKEN_404", "BROKEN_403", "BROKEN_SERVER_", "BROKEN_HTTP_ERROR", "ACCESS_DENIED"],
-            "Technical Issues": ["cloudflare_blocked", "BROWSER_ERROR", "error", "not_tested"]
-        }
-        
-        for group_name, status_list in status_groups.items():
-            group_count = 0
-            for status in status_list:
-                for key, value in status_counts.items():
-                    if key.startswith(status) if "_" in status else status in key:
-                        group_count += value
+        with open(filename, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=[
+                "Product_ID",
+                "Product_Title",
+                "URL",
+                "Page_Title",
+                "HTTP_Status",
+                "Test_Time"
+            ])
+            writer.writeheader()
             
-            if group_count > 0:
-                print(f"  {group_name}: {group_count}")
+            for r in active_links:
+                writer.writerow({
+                    "Product_ID": r["product_id"],
+                    "Product_Title": r["product_title"][:100],
+                    "URL": r["url"],  # Full URL
+                    "Page_Title": r["page_title"][:150] if r["page_title"] else "",
+                    "HTTP_Status": r["http_status"] or "",
+                    "Test_Time": r["timestamp"]
+                })
         
-        # Show individual statuses for debugging
-        print("\n🔍 All Status Codes:")
-        for status, count in sorted(status_counts.items()):
-            print(f"  {status}: {count}")
+        print(f"💾 Active links saved to: {filename}")
+    
+    def save_out_of_stock_csv(self, out_of_stock_links):
+        """Save out of stock links to a separate CSV"""
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"bunnings_out_of_stock_{timestamp}.csv"
+        
+        with open(filename, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.DictWriter(f, fieldnames=[
+                "Product_ID",
+                "Product_Title",
+                "URL",
+                "Page_Title",
+                "HTTP_Status",
+                "Test_Time"
+            ])
+            writer.writeheader()
+            
+            for r in out_of_stock_links:
+                writer.writerow({
+                    "Product_ID": r["product_id"],
+                    "Product_Title": r["product_title"][:100],
+                    "URL": r["url"],  # Full URL
+                    "Page_Title": r["page_title"][:150] if r["page_title"] else "",
+                    "HTTP_Status": r["http_status"] or "",
+                    "Test_Time": r["timestamp"]
+                })
+        
+        print(f"💾 Out of stock links saved to: {filename}")
     
     def close(self):
         """Cleanup"""
         if self.driver:
             try:
                 self.driver.quit()
-                print("✅ Browser closed")
             except:
                 pass
 
@@ -685,24 +621,40 @@ class CombinedBunningsChecker:
 # ===== MAIN EXECUTION =====
 if __name__ == "__main__":
     print("\n" + "="*60)
-    print("🔗 COMBINED BUNNINGS LINK CHECKER - FIXED")
+    print("🔗 AUTOMATIC BUNNINGS BROKEN LINK FINDER")
     print("="*60)
-    print("Starting combined checker...")
-    print("FIX: Removing ... from URLs before testing")
+    print("NEW LOGIC: Add to Cart button found = ACTIVE link")
+    print("="*60)
+    print("This script will:")
+    print("1. Auto-discover your metafield structure")
+    print("2. Find all Bunnings URLs")
+    print("3. Check which links are active/broken/out-of-stock")
     print("="*60)
     
-    checker = CombinedBunningsChecker(headless=False)  # Set to True for headless
+    checker = AutoBunningsChecker(headless=True)
     
     try:
-        results = checker.run_complete_check()
+        print("\n🚀 Starting automatic broken link check...")
+        results = checker.find_broken_links()
         
         if results:
-            broken_count = sum(1 for r in results if not r['is_working'])
+            # Final summary
+            active_count = sum(1 for r in results if r["status"] == "ACTIVE")
+            broken_count = sum(1 for r in results if "BROKEN" in r["status"])
+            out_of_stock_count = sum(1 for r in results if r["status"] == "OUT_OF_STOCK")
+            
+            print(f"\n" + "="*60)
+            print("🎯 FINAL SUMMARY")
+            print("="*60)
+            print(f"✅ ACTIVE (Add to Cart found): {active_count}")
+            print(f"⚠️  OUT OF STOCK: {out_of_stock_count}")
+            print(f"❌ BROKEN: {broken_count}")
+            
             if broken_count > 0:
-                print(f"\n⚠️  ACTION REQUIRED: Found {broken_count} non-working Bunnings links!")
+                print(f"\n⚠️  ACTION REQUIRED: Found {broken_count} broken Bunnings links!")
                 print("   Check the CSV files for details.")
             else:
-                print(f"\n✅ SUCCESS: All links are working!")
+                print(f"\n✅ SUCCESS: No broken links found!")
         else:
             print("\n❌ No results to report.")
             
